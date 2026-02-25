@@ -37,13 +37,62 @@ const convertJobs = new Map<string, ConvertJob>();
 
 export class ConvertController {
   /**
+   * 处理直接上传转换 (DOCX 或 ZIP)
+   */
+  public docxToPdf(req: Request, res: Response, _next: NextFunction) {
+    if (!req.file) {
+      res.status(400).json({ success: false, message: '请上传文件' });
+      return;
+    }
+
+    const jobId = uuidv4();
+    const inputPath = req.file.path;
+    const originalName = path.parse(req.file.originalname).name;
+    const isZip = req.file.originalname.toLowerCase().endsWith('.zip');
+    
+    const makeEven = req.body.makeEven === 'true' || req.body.makeEven === true;
+
+    const job: ConvertJob = {
+      id: jobId,
+      status: 'pending',
+      inputPath,
+      outputFileName: isZip ? `${originalName}_converted.zip` : `${originalName}.pdf`,
+      createdAt: Date.now(),
+      isZip,
+      options: { makeEven }
+    };
+
+    convertJobs.set(jobId, job);
+
+    this.processConversion(jobId, inputPath, isZip, makeEven)
+      .catch((error) => {
+        console.error(`[Job ${jobId}] Critical error:`, error);
+        const failedJob = convertJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.error = error instanceof Error ? error.message : '未知错误';
+          convertJobs.set(jobId, failedJob);
+        }
+      });
+
+    res.status(202).json({
+      success: true,
+      message: '任务已提交',
+      jobId,
+    });
+  }
+
+  /**
    * 处理分块上传
    */
   public async uploadChunk(req: Request, res: Response) {
     const { uploadId, index, total, fileName, makeEven } = req.body;
     const chunk = req.file;
 
-    if (!chunk) return res.status(400).json({ success: false, message: '无分块数据' });
+    if (!chunk) {
+      res.status(400).json({ success: false, message: '无分块数据' });
+      return;
+    }
 
     const chunkDir = path.join(os.tmpdir(), `chunks_${uploadId}`);
     if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
@@ -59,7 +108,8 @@ export class ConvertController {
       const finalPath = path.join(os.tmpdir(), `upload_${uploadId}_${fileName}`);
       const writeStream = fs.createWriteStream(finalPath);
       
-      for (let i = 0; i < chunks.length; i++) {
+      const chunkCount = parseInt(total);
+      for (let i = 0; i < chunkCount; i++) {
         const p = path.join(chunkDir, `${i}`);
         const buf = fs.readFileSync(p);
         writeStream.write(buf);
@@ -70,15 +120,15 @@ export class ConvertController {
       writeStream.on('finish', () => {
         fs.rmSync(chunkDir, { recursive: true, force: true });
         
-        // 伪造一个 req.file 对象，复用原有的转换逻辑
         const isZip = fileName.toLowerCase().endsWith('.zip');
-        const jobId = uploadId; // 使用上传 ID 作为任务 ID
+        const jobId = uploadId; 
+        const originalName = path.parse(fileName).name;
         
         const job: ConvertJob = {
           id: jobId,
           status: 'pending',
           inputPath: finalPath,
-          outputFileName: isZip ? `${path.parse(fileName).name}_converted.zip` : `${path.parse(fileName).name}.pdf`,
+          outputFileName: isZip ? `${originalName}_converted.zip` : `${originalName}.pdf`,
           createdAt: Date.now(),
           isZip,
           options: { makeEven: makeEven === 'true' }
@@ -88,7 +138,8 @@ export class ConvertController {
         this.processConversion(jobId, finalPath, isZip, job.options?.makeEven || false);
       });
 
-      return res.json({ success: true, message: '文件合并中', jobId: uploadId, merged: true });
+      res.json({ success: true, message: '文件合并中', jobId: uploadId, merged: true });
+      return;
     }
 
     res.json({ success: true, message: `分块 ${index} 接收成功`, merged: false });
