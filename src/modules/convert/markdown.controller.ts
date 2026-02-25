@@ -114,7 +114,8 @@ export class MarkdownController {
 
     if (!job || job.token !== token) return res.status(403).send('Forbidden');
 
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.outputFileName)}"`);
+    const encodedFileName = encodeURIComponent(job.outputFileName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.outputFileName)}"; filename*=UTF-8''${encodedFileName}`);
     res.sendFile(path.resolve(job.outputPath), () => {
       fs.rmSync(path.dirname(job.outputPath), { recursive: true, force: true });
       MarkdownController.jobs.delete(jobId);

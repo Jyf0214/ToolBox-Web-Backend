@@ -38,6 +38,7 @@ const convertJobs = new Map<string, ConvertJob>();
 export class ConvertController {
   public docxToPdf(req: Request, res: Response, _next: NextFunction) {
     if (!req.file) {
+      console.error('[Convert] No file received in request');
       res.status(400).json({ success: false, message: '请上传文件' });
       return;
     }
@@ -48,6 +49,8 @@ export class ConvertController {
     const isZip = req.file.originalname.toLowerCase().endsWith('.zip');
     
     const makeEven = req.body.makeEven === 'true' || req.body.makeEven === true;
+
+    console.log(`[Job ${jobId}] Starting conversion: ${req.file.originalname} (isZip: ${isZip})`);
 
     const job: ConvertJob = {
       id: jobId,
@@ -63,7 +66,7 @@ export class ConvertController {
 
     this.processConversion(jobId, inputPath, isZip, makeEven)
       .catch((error) => {
-        console.error(`[Job ${jobId}] Critical error:`, error);
+        console.error(`[Job ${jobId}] Critical error:`, error.message || error);
         const failedJob = convertJobs.get(jobId);
         if (failedJob) {
           failedJob.status = 'failed';
@@ -81,29 +84,41 @@ export class ConvertController {
 
   private async processConversion(jobId: string, inputPath: string, isZip: boolean, makeEven: boolean) {
     const job = convertJobs.get(jobId);
-    if (!job) return;
+    if (!job) {
+      console.error(`[Job ${jobId}] Job not found in map`);
+      return;
+    }
 
     job.status = 'processing';
     const tempBaseDir = path.join(os.tmpdir(), `job_${jobId}`);
     fs.mkdirSync(tempBaseDir, { recursive: true });
 
     try {
+      console.log(`[Job ${jobId}] Input file size: ${fs.statSync(inputPath).size} bytes`);
+      
       if (isZip) {
+        console.log(`[Job ${jobId}] Processing ZIP file`);
         await this.handleZipProcessing(job, inputPath, tempBaseDir, makeEven);
       } else {
+        console.log(`[Job ${jobId}] Processing single DOCX file`);
         await this.handleSingleFileProcessing(job, inputPath, tempBaseDir, makeEven);
       }
 
       job.token = generateDownloadToken('anonymous');
       job.status = 'completed';
+      console.log(`[Job ${jobId}] Conversion completed. Output: ${job.outputPath}`);
       convertJobs.set(jobId, job);
     } catch (error: any) {
+      console.error(`[Job ${jobId}] Conversion failed:`, error.message);
       job.status = 'failed';
       job.error = error.message;
       convertJobs.set(jobId, job);
       throw error;
     } finally {
-      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+        console.log(`[Job ${jobId}] Input file cleaned up`);
+      }
     }
   }
 
@@ -120,8 +135,14 @@ export class ConvertController {
     fs.mkdirSync(unzipDir, { recursive: true });
     fs.mkdirSync(outputDir, { recursive: true });
 
-    const zip = new AdmZip(inputPath);
-    zip.extractAllTo(unzipDir, true);
+    try {
+      console.log(`[Job ${job.id}] Extracting ZIP to: ${unzipDir}`);
+      const zip = new AdmZip(inputPath);
+      zip.extractAllTo(unzipDir, true);
+    } catch (error: any) {
+      console.error(`[Job ${job.id}] ZIP extraction failed:`, error.message);
+      throw new Error(`ZIP 解析失败: ${error.message}`);
+    }
 
     const allFiles: string[] = [];
     const walk = (dir: string) => {
@@ -136,6 +157,12 @@ export class ConvertController {
     };
     walk(unzipDir);
 
+    console.log(`[Job ${job.id}] Found ${allFiles.length} DOCX files in ZIP`);
+    
+    if (allFiles.length === 0) {
+      throw new Error('ZIP 压缩包中未找到 .docx 文件');
+    }
+
     job.progress = { total: allFiles.length, current: 0, message: `共 ${allFiles.length} 个文件` };
     convertJobs.set(job.id, job);
 
@@ -149,10 +176,13 @@ export class ConvertController {
       job.progress.message = `正在处理: ${path.basename(file)}`;
       convertJobs.set(job.id, job);
 
-      const pdfPath = await this.convertDocxToPdf(file, fileOutDir, makeEven);
-      
-      const zipPath = path.join(path.dirname(relativePath), path.basename(pdfPath));
-      outZip.addLocalFile(pdfPath, path.dirname(relativePath));
+      try {
+        const pdfPath = await this.convertDocxToPdf(file, fileOutDir, makeEven);
+        outZip.addLocalFile(pdfPath, path.dirname(relativePath));
+      } catch (error: any) {
+        console.error(`[Job ${job.id}] Failed to convert ${path.basename(file)}:`, error.message);
+        throw error;
+      }
       
       job.progress.current++;
       convertJobs.set(job.id, job);
@@ -161,6 +191,8 @@ export class ConvertController {
     const finalZipPath = path.join(tempBaseDir, job.outputFileName);
     outZip.writeZip(finalZipPath);
     job.outputPath = finalZipPath;
+    
+    console.log(`[Job ${job.id}] Output ZIP created: ${finalZipPath}`);
     
     // 清理中间目录
     fs.rmSync(unzipDir, { recursive: true, force: true });
@@ -171,24 +203,38 @@ export class ConvertController {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     
     const command = `libreoffice --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
-    await execAsync(command);
+    
+    try {
+      const { stdout, stderr } = await execAsync(command);
+      if (stderr) {
+        console.warn(`[Convert] libreoffice stderr for ${path.basename(docxPath)}:`, stderr);
+      }
+    } catch (error: any) {
+      console.error(`[Convert] libreoffice conversion failed for ${path.basename(docxPath)}:`, error.message);
+      throw new Error(`LibreOffice 转换失败: ${error.message}`);
+    }
 
     const originalName = path.parse(docxPath).name;
     const files = fs.readdirSync(outDir);
-    // 这里的逻辑需要更精准，因为 outDir 下可能已有其他 PDF
     const expectedName = `${originalName}.pdf`;
     const pdfPath = path.join(outDir, expectedName);
 
     if (!fs.existsSync(pdfPath)) {
-      throw new Error(`转换失败: ${path.basename(docxPath)}`);
+      console.error(`[Convert] Expected PDF not found: ${expectedName}, found files:`, files);
+      throw new Error(`转换失败: ${path.basename(docxPath)} - 输出文件不存在`);
     }
 
     if (makeEven) {
-      const pdfBytes = fs.readFileSync(pdfPath);
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      if (pdfDoc.getPageCount() % 2 !== 0) {
-        pdfDoc.addPage();
-        fs.writeFileSync(pdfPath, Buffer.from(await pdfDoc.save()));
+      try {
+        const pdfBytes = fs.readFileSync(pdfPath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        if (pdfDoc.getPageCount() % 2 !== 0) {
+          pdfDoc.addPage();
+          fs.writeFileSync(pdfPath, Buffer.from(await pdfDoc.save()));
+        }
+      } catch (error: any) {
+        console.error(`[Convert] Failed to make PDF even pages:`, error.message);
+        throw error;
       }
     }
 
