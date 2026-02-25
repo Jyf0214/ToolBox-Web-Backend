@@ -16,6 +16,7 @@ const upload = multer({
 
 // DOCX 转换路由
 router.post('/docx-to-pdf', upload.single('file'), (req, res, next) => convertController.docxToPdf(req, res, next));
+router.post('/upload-chunk', upload.single('file'), (req, res) => convertController.uploadChunk(req, res));
 router.get('/status/:jobId', (req, res) => convertController.getStatus(req, res));
 router.get('/download/:jobId', (req, res) => convertController.downloadFile(req, res));
 
