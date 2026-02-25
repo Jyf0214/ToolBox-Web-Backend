@@ -45,6 +45,7 @@ app.get('/', (req, res) => {
     author: 'Jyf0214',
     links: {
       github: 'https://github.com/Jyf0214/ToolBox-Web',
+      documentation: 'https://github.com/Jyf0214/ToolBox-Web/wiki', // 占位链接
       health: '/health'
     }
   });
