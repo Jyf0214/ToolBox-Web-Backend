@@ -8,10 +8,14 @@ import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { PDFDocument } from 'pdf-lib';
 import AdmZip from 'adm-zip';
+import pLimit from 'p-limit';
 
 import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
 
 const execAsync = util.promisify(exec);
+
+// 配置并发 Worker 数量
+const CONCURRENCY_LIMIT = 5;
 
 interface ConvertJob {
   id: string;
@@ -36,9 +40,6 @@ interface ConvertJob {
 const convertJobs = new Map<string, ConvertJob>();
 
 export class ConvertController {
-  /**
-   * 处理直接上传转换 (DOCX 或 ZIP)
-   */
   public docxToPdf(req: Request, res: Response, _next: NextFunction) {
     if (!req.file) {
       res.status(400).json({ success: false, message: '请上传文件' });
@@ -82,9 +83,6 @@ export class ConvertController {
     });
   }
 
-  /**
-   * 处理分块上传
-   */
   public async uploadChunk(req: Request, res: Response) {
     const { uploadId, index, total, fileName, makeEven } = req.body;
     const chunk = req.file;
@@ -97,14 +95,11 @@ export class ConvertController {
     const chunkDir = path.join(os.tmpdir(), `chunks_${uploadId}`);
     if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
 
-    // 存储分块
     const chunkPath = path.join(chunkDir, `${index}`);
     fs.renameSync(chunk.path, chunkPath);
 
-    // 检查是否所有分块都已到达
     const chunks = fs.readdirSync(chunkDir);
     if (chunks.length === parseInt(total)) {
-      // 开始合并
       const finalPath = path.join(os.tmpdir(), `upload_${uploadId}_${fileName}`);
       const writeStream = fs.createWriteStream(finalPath);
       
@@ -113,7 +108,7 @@ export class ConvertController {
         const p = path.join(chunkDir, `${i}`);
         const buf = fs.readFileSync(p);
         writeStream.write(buf);
-        fs.unlinkSync(p); // 删除已合并分块
+        fs.unlinkSync(p);
       }
       writeStream.end();
 
@@ -210,29 +205,38 @@ export class ConvertController {
 
     if (allFiles.length === 0) throw new Error('未在压缩包中找到任何 .docx 文件');
 
-    job.progress = { total: allFiles.length, current: 0, message: `准备处理 ${allFiles.length} 个文件` };
+    job.progress = { total: allFiles.length, current: 0, message: `正在启动并发转换 (5 Workers)...` };
     convertJobs.set(job.id, job);
 
     const outZip = new AdmZip();
+    const limit = pLimit(CONCURRENCY_LIMIT);
 
-    for (const file of allFiles) {
-      const relativePath = path.relative(unzipDir, file);
-      const fileOutDir = path.join(outputDir, path.dirname(relativePath));
-      
-      job.progress.message = `转换: ${path.basename(file)}`;
-      convertJobs.set(job.id, job);
+    // 并发执行转换任务，限制 5 个 worker
+    const tasks = allFiles.map((file) => 
+      limit(async () => {
+        const relativePath = path.relative(unzipDir, file);
+        const fileOutDir = path.join(outputDir, path.dirname(relativePath));
+        
+        try {
+          const pdfPath = await this.convertDocxToPdf(file, fileOutDir, makeEven);
+          const zipEntryPath = path.join(path.dirname(relativePath));
+          
+          // 注意：AdmZip.addLocalFile 不是线程安全的，但在 Node 单线程事件循环中可以配合 await 使用
+          outZip.addLocalFile(pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
+          
+          // 安全更新进度
+          if (job.progress) {
+            job.progress.current++;
+            job.progress.message = `正在处理: ${path.basename(file)} (${job.progress.current}/${job.progress.total})`;
+            convertJobs.set(job.id, job);
+          }
+        } catch (err: any) {
+          console.warn(`[ZIP Job ${job.id}] Skipping file ${file}:`, err.message);
+        }
+      })
+    );
 
-      try {
-        const pdfPath = await this.convertDocxToPdf(file, fileOutDir, makeEven);
-        const zipEntryPath = path.join(path.dirname(relativePath));
-        outZip.addLocalFile(pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
-      } catch (err: any) {
-        console.warn(`[ZIP Job ${job.id}] Skipping file ${file}:`, err.message);
-      }
-      
-      job.progress.current++;
-      convertJobs.set(job.id, job);
-    }
+    await Promise.all(tasks);
 
     const finalZipPath = path.join(tempBaseDir, job.outputFileName);
     outZip.writeZip(finalZipPath);
