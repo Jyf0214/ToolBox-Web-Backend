@@ -327,7 +327,7 @@ export class ConvertController {
       .replace(/\'/g, '%27')
       .replace(/\*/g, '%2A');
 
-    res.setHeader('Content-Disposition', `attachment; filename="${rawName}"; filename*=UTF-8''${rfc6266Name}`);
+    res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
     res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
