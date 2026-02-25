@@ -6,6 +6,7 @@ import util from 'util';
 
 import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { PDFDocument } from 'pdf-lib';
 
 import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
 
@@ -20,6 +21,9 @@ interface ConvertJob {
   token?: string;
   error?: string;
   createdAt: number;
+  options?: {
+    makeEven?: boolean;
+  };
 }
 
 // 转换任务存储 (内存，生产环境应用 Redis)
@@ -44,6 +48,9 @@ export class ConvertController {
     const inputPath = req.file.path;
     const outputDir = path.join(tempDir, `output_${Date.now()}`);
     const originalName = path.parse(req.file.originalname).name;
+    
+    // 获取选项 (由于是 multipart/form-data，makeEven 可能是字符串 "true")
+    const makeEven = req.body.makeEven === 'true' || req.body.makeEven === true;
 
     const job: ConvertJob = {
       id: jobId,
@@ -51,12 +58,13 @@ export class ConvertController {
       inputPath,
       outputFileName: `${originalName}.pdf`,
       createdAt: Date.now(),
+      options: { makeEven }
     };
 
     convertJobs.set(jobId, job);
 
     // 异步处理转换
-    this.processConversion(jobId, inputPath, outputDir, originalName)
+    this.processConversion(jobId, inputPath, outputDir, originalName, makeEven)
       .catch((error) => {
         console.error('转换出错:', error);
         const failedJob = convertJobs.get(jobId);
@@ -82,7 +90,8 @@ export class ConvertController {
     jobId: string,
     inputPath: string,
     outputDir: string,
-    originalName: string
+    originalName: string,
+    makeEven: boolean
   ) {
     const job = convertJobs.get(jobId);
     if (!job) return;
@@ -108,7 +117,7 @@ export class ConvertController {
         throw new Error(`LibreOffice 执行失败: ${execError.message}`);
       }
 
-      // 获取生成的文件路径 (处理 LibreOffice 可能改变文件名的情况)
+      // 获取生成的文件路径
       const files = fs.readdirSync(outputDir);
       const generatedFile = files.find(f => f.endsWith('.pdf'));
       const pdfPath = generatedFile ? path.join(outputDir, generatedFile) : null;
@@ -118,6 +127,24 @@ export class ConvertController {
         throw new Error('转换失败：PDF 文件未生成');
       }
 
+      // 补全偶数页逻辑
+      if (makeEven) {
+        console.log(`[Job ${jobId}] Checking page count for makeEven option...`);
+        const pdfBytes = fs.readFileSync(pdfPath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        const pageCount = pdfDoc.getPageCount();
+        
+        if (pageCount % 2 !== 0) {
+          console.log(`[Job ${jobId}] Odd pages found (${pageCount}), adding a blank page...`);
+          pdfDoc.addPage();
+          const modifiedPdfBytes = await pdfDoc.save();
+          fs.writeFileSync(pdfPath, Buffer.from(modifiedPdfBytes));
+          console.log(`[Job ${jobId}] Blank page added. New count: ${pdfDoc.getPageCount()}`);
+        } else {
+          console.log(`[Job ${jobId}] Already even pages (${pageCount}), skipping.`);
+        }
+      }
+
       // 生成一次性下载 token
       const token = generateDownloadToken('anonymous');
       job.status = 'completed';
@@ -125,6 +152,11 @@ export class ConvertController {
       job.token = token;
       convertJobs.set(jobId, job);
       console.log(`[Job ${jobId}] Conversion completed successfully`);
+
+      // 清理临时输入文件
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+      }
     } catch (error) {
       job.status = 'failed';
       job.error = error instanceof Error ? error.message : '未知错误';
