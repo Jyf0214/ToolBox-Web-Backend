@@ -2,6 +2,7 @@ import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import userRoutes from './modules/user/user.routes';
+import convertRoutes from './modules/convert/convert.routes';
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // 模块路由
 app.use('/api/users', userRoutes);
+app.use('/api/convert', convertRoutes);
 
 // 健康检查接口
 app.get('/health', (req: Request, res: Response) => {
