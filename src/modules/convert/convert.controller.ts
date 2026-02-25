@@ -246,8 +246,21 @@ export class ConvertController {
   private async convertDocxToPdf(docxPath: string, outDir: string, makeEven: boolean): Promise<string> {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     
-    const command = `libreoffice --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
-    await execAsync(command);
+    // 关键修复：为每个进程分配独立的 UserInstallation 路径，绕过 LibreOffice 的单实例锁
+    // 这样 5 个 Worker 才能真正同时运行
+    const profileId = uuidv4();
+    const userProfileDir = path.join(os.tmpdir(), `libre_profile_${profileId}`);
+    
+    const command = `libreoffice -env:UserInstallation=file://${userProfileDir} --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
+    
+    try {
+      await execAsync(command);
+    } finally {
+      // 转换结束后立即清理配置文件目录，防止磁盘撑爆
+      if (fs.existsSync(userProfileDir)) {
+        fs.rmSync(userProfileDir, { recursive: true, force: true });
+      }
+    }
 
     const originalName = path.parse(docxPath).name;
     const pdfPath = path.join(outDir, `${originalName}.pdf`);
