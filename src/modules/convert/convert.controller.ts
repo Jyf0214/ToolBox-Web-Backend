@@ -219,6 +219,10 @@ export class ConvertController {
       return;
     }
 
+    // 修复中文文件名乱码：使用 RFC 6266 标准编码
+    const encodedFileName = encodeURIComponent(job.outputFileName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+    res.setHeader('Content-Disposition', `attachment; filename="${job.outputFileName}"; filename*=UTF-8''${encodedFileName}`);
+
     // 发送文件并清理
     res.download(job.outputPath, job.outputFileName, () => {
       // 下载完成后清理
