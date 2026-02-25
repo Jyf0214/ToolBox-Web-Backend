@@ -35,6 +35,21 @@ app.use(rateLimit(100, 60000));
 app.use('/api/users', userRoutes);
 app.use('/api/convert', convertRoutes);
 
+// 后端首页欢迎信息
+app.get('/', (req, res) => {
+  res.json({
+    name: 'ToolBox-Web Backend',
+    version: '1.0.0',
+    description: '一个极简、高效、模块化的在线工具箱后端 API',
+    status: 'Running',
+    author: 'Jyf0214',
+    links: {
+      github: 'https://github.com/Jyf0214/ToolBox-Web',
+      health: '/health'
+    }
+  });
+});
+
 // 健康检查接口
 app.get('/health', (req, res) => {
   res.json({
