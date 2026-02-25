@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { validationResult } from 'express-validator';
 
 /**
@@ -7,14 +7,18 @@ import { validationResult } from 'express-validator';
 export function validateRequest(req: Request, res: Response, next: NextFunction): void {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({
+    res.status(400).json({
       success: false,
       message: '请求参数验证失败',
-      errors: errors.array().map((err: any) => ({
-        field: err.path,
-        message: err.msg,
-      })),
+      errors: errors.array().map((err) => {
+        const errorItem = err as unknown as { path: string; msg: string };
+        return {
+          field: errorItem.path,
+          message: errorItem.msg,
+        };
+      }),
     });
+    return;
   }
   next();
 }
@@ -26,7 +30,7 @@ const requestCount = new Map<string, { count: number; resetTime: number }>();
 
 export function rateLimit(maxRequests: number = 100, windowMs: number = 60000) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const ip = req.ip || 'unknown';
+    const ip = req.ip ?? 'unknown';
     const now = Date.now();
     const record = requestCount.get(ip);
 
@@ -38,11 +42,12 @@ export function rateLimit(maxRequests: number = 100, windowMs: number = 60000) {
 
     if (record.count >= maxRequests) {
       res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000));
-      return res.status(429).json({
+      res.status(429).json({
         success: false,
         message: '请求过于频繁，请稍后再试',
         status: 429,
       });
+      return;
     }
 
     record.count += 1;

@@ -1,12 +1,14 @@
-import express, { Application } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
+import { config } from 'dotenv';
+import type { Application } from 'express';
+import express, { json, urlencoded } from 'express';
+
+import convertRoutes from './modules/convert/convert.routes';
+import userRoutes from './modules/user/user.routes';
 import { errorHandler, notFoundHandler } from './shared/middlewares/error.middleware';
 import { rateLimit } from './shared/middlewares/validation.middleware';
-import userRoutes from './modules/user/user.routes';
-import convertRoutes from './modules/convert/convert.routes';
 
-dotenv.config();
+config();
 
 /**
  * Express 应用实例
@@ -20,11 +22,11 @@ if (process.env.NODE_ENV === 'production') {
 
 // 基础中间件
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*',
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(json({ limit: '10mb' }));
+app.use(urlencoded({ extended: true, limit: '10mb' }));
 
 // 全局限流
 app.use(rateLimit(100, 60000));

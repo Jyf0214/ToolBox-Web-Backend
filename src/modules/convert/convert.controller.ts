@@ -1,11 +1,13 @@
-import { Request, Response, NextFunction } from 'express';
 import { exec } from 'child_process';
-import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import util from 'util';
+
+import type { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { generateDownloadToken } from '../shared/middlewares/token.middleware';
+
+import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
 
 const execAsync = util.promisify(exec);
 
@@ -31,9 +33,10 @@ export class ConvertController {
   /**
    * 处理 DOCX 转 PDF 请求
    */
-  public async docxToPdf(req: Request, res: Response, next: NextFunction) {
+  public docxToPdf(req: Request, res: Response, _next: NextFunction) {
     if (!req.file) {
-      return res.status(400).json({ success: false, message: '请上传文件' });
+      res.status(400).json({ success: false, message: '请上传文件' });
+      return;
     }
 
     const jobId = uuidv4();
@@ -128,18 +131,27 @@ export class ConvertController {
   /**
    * 查询转换状态
    */
-  public async getStatus(req: Request, res: Response) {
-    const { jobId } = req.params;
+  public getStatus(req: Request, res: Response) {
+    const jobId = req.params.jobId as string;
     const job = convertJobs.get(jobId);
 
     if (!job) {
-      return res.status(404).json({
+      res.status(404).json({
         success: false,
         message: '未找到转换任务',
       });
+      return;
     }
 
-    const response: any = {
+    const response: {
+      success: boolean;
+      jobId: string;
+      status: string;
+      outputFileName: string;
+      downloadToken?: string;
+      downloadUrl?: string;
+      error?: string;
+    } = {
       success: true,
       jobId: job.id,
       status: job.status,
@@ -161,38 +173,42 @@ export class ConvertController {
   /**
    * 下载转换后的文件 (需要 token 验证)
    */
-  public async downloadFile(req: Request, res: Response) {
-    const { jobId } = req.params;
+  public downloadFile(req: Request, res: Response) {
+    const jobId = req.params.jobId as string;
     const token = req.query.token as string;
 
     const job = convertJobs.get(jobId);
 
     if (!job) {
-      return res.status(404).json({
+      res.status(404).json({
         success: false,
         message: '未找到转换任务',
       });
+      return;
     }
 
     if (job.status !== 'completed') {
-      return res.status(400).json({
+      res.status(400).json({
         success: false,
         message: '文件尚未转换完成',
       });
+      return;
     }
 
     if (!token || !job.token || token !== job.token) {
-      return res.status(403).json({
+      res.status(403).json({
         success: false,
         message: '下载凭证无效或已失效',
       });
+      return;
     }
 
     if (!job.outputPath || !fs.existsSync(job.outputPath)) {
-      return res.status(404).json({
+      res.status(404).json({
         success: false,
         message: '文件不存在或已过期',
       });
+      return;
     }
 
     // 发送文件并清理
