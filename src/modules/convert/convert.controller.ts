@@ -121,13 +121,11 @@ export class ConvertController {
     fs.mkdirSync(unzipDir, { recursive: true });
     fs.mkdirSync(outputDir, { recursive: true });
 
-    // 尝试以不同编码解压 (处理 Windows ZIP 乱码)
     try {
       const zip = new AdmZip(inputPath);
       zip.extractAllTo(unzipDir, true);
     } catch (zipErr) {
-      console.error(`[ZIP Job ${job.id}] Primary extract failed, check encoding:`, zipErr);
-      throw new Error('压缩包解析失败，请确保格式正确 (建议使用标准 ZIP)');
+      throw new Error('压缩包解析失败，请确保格式正确');
     }
 
     const allFiles: string[] = [];
@@ -144,9 +142,7 @@ export class ConvertController {
     };
     walk(unzipDir);
 
-    if (allFiles.length === 0) {
-      throw new Error('未在压缩包中找到任何 .docx 文件');
-    }
+    if (allFiles.length === 0) throw new Error('未在压缩包中找到任何 .docx 文件');
 
     job.progress = { total: allFiles.length, current: 0, message: `准备处理 ${allFiles.length} 个文件` };
     convertJobs.set(job.id, job);
@@ -165,7 +161,7 @@ export class ConvertController {
         const zipEntryPath = path.join(path.dirname(relativePath));
         outZip.addLocalFile(pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
       } catch (err: any) {
-        console.warn(`[ZIP Job ${job.id}] Skipping file ${file} due to error:`, err.message);
+        console.warn(`[ZIP Job ${job.id}] Skipping file ${file}:`, err.message);
       }
       
       job.progress.current++;
@@ -180,7 +176,6 @@ export class ConvertController {
   private async convertDocxToPdf(docxPath: string, outDir: string, makeEven: boolean): Promise<string> {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     
-    // 清理路径中的特殊字符或空格，使用双引号包裹
     const command = `libreoffice --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
     await execAsync(command);
 
@@ -188,9 +183,7 @@ export class ConvertController {
     const pdfPath = path.join(outDir, `${originalName}.pdf`);
 
     if (!fs.existsSync(pdfPath)) {
-      // 容错逻辑：尝试搜索该目录下新生成的 pdf
-      const files = fs.readdirSync(outDir);
-      const fallbackPdf = files.find(f => f.endsWith('.pdf'));
+      const fallbackPdf = fs.readdirSync(outDir).find(f => f.endsWith('.pdf'));
       if (!fallbackPdf) throw new Error(`文件生成失败: ${path.basename(docxPath)}`);
       return path.join(outDir, fallbackPdf);
     }
@@ -204,7 +197,7 @@ export class ConvertController {
           fs.writeFileSync(pdfPath, Buffer.from(await pdfDoc.save()));
         }
       } catch (e) {
-        console.warn('PDF补全偶数页失败:', e);
+        console.warn('补全偶数页失败:', e);
       }
     }
 
@@ -238,16 +231,24 @@ export class ConvertController {
       return;
     }
 
-    const encodedFileName = encodeURIComponent(job.outputFileName).replace(/[!'()]/g, escape).replace(/\*/g, '%2A');
-    res.setHeader('Content-Disposition', `attachment; filename="${job.outputFileName}"; filename*=UTF-8''${encodedFileName}`);
+    // 符合 RFC 6266 标准的编码逻辑，不依赖过时的 escape()
+    const rawName = job.outputFileName;
+    const uriEncodedName = encodeURIComponent(rawName);
+    const rfc6266Name = uriEncodedName
+      .replace(/\(/g, '%28')
+      .replace(/\)/g, '%29')
+      .replace(/\!/g, '%21')
+      .replace(/\'/g, '%27')
+      .replace(/\*/g, '%2A');
+
+    res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
     res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
     res.sendFile(path.resolve(job.outputPath), (err) => {
       if (!err) {
         const jobDir = path.dirname(job.outputPath!);
-        if (jobDir.includes('job_')) {
-          fs.rmSync(jobDir, { recursive: true, force: true });
-        }
+        if (jobDir.includes('job_')) fs.rmSync(jobDir, { recursive: true, force: true });
         convertJobs.delete(jobId);
       }
     });
