@@ -95,14 +95,26 @@ export class ConvertController {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      // 调用 LibreOffice 命令行进行转换
+      // 增强日志：打印执行命令
       const command = `libreoffice --headless --convert-to pdf --outdir "${outputDir}" "${inputPath}"`;
-      await execAsync(command);
+      console.log(`[Job ${jobId}] Executing: ${command}`);
 
-      // 获取生成的文件路径
-      const pdfPath = path.join(outputDir, `${originalName}.pdf`);
+      try {
+        const { stdout, stderr } = await execAsync(command);
+        if (stdout) console.log(`[Job ${jobId}] LibreOffice stdout: ${stdout}`);
+        if (stderr) console.warn(`[Job ${jobId}] LibreOffice stderr: ${stderr}`);
+      } catch (execError: any) {
+        console.error(`[Job ${jobId}] Execution failed:`, execError.message);
+        throw new Error(`LibreOffice 执行失败: ${execError.message}`);
+      }
 
-      if (!fs.existsSync(pdfPath)) {
+      // 获取生成的文件路径 (处理 LibreOffice 可能改变文件名的情况)
+      const files = fs.readdirSync(outputDir);
+      const generatedFile = files.find(f => f.endsWith('.pdf'));
+      const pdfPath = generatedFile ? path.join(outputDir, generatedFile) : null;
+
+      if (!pdfPath || !fs.existsSync(pdfPath)) {
+        console.error(`[Job ${jobId}] PDF not found in ${outputDir}. Files:`, files);
         throw new Error('转换失败：PDF 文件未生成');
       }
 
@@ -112,11 +124,7 @@ export class ConvertController {
       job.outputPath = pdfPath;
       job.token = token;
       convertJobs.set(jobId, job);
-
-      // 清理临时输入文件
-      if (fs.existsSync(inputPath)) {
-        fs.unlinkSync(inputPath);
-      }
+      console.log(`[Job ${jobId}] Conversion completed successfully`);
     } catch (error) {
       job.status = 'failed';
       job.error = error instanceof Error ? error.message : '未知错误';
