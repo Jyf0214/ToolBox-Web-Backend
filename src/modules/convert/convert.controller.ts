@@ -219,13 +219,25 @@ export class ConvertController {
       return;
     }
 
-    // 修复中文文件名乱码：使用 RFC 6266 标准编码
+    // 修复中文文件名乱码：使用 RFC 6266 标准编码，并添加详细日志
     const encodedFileName = encodeURIComponent(job.outputFileName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
-    res.setHeader('Content-Disposition', `attachment; filename="${job.outputFileName}"; filename*=UTF-8''${encodedFileName}`);
+    const contentDisposition = `attachment; filename="${encodeURIComponent(job.outputFileName)}"; filename*=UTF-8''${encodedFileName}`;
+    
+    res.setHeader('Content-Disposition', contentDisposition);
+    res.setHeader('Content-Type', 'application/pdf');
 
-    // 发送文件并清理
-    res.download(job.outputPath, job.outputFileName, () => {
-      // 下载完成后清理
+    console.log(`[Job ${jobId}] Starting download: ${job.outputFileName}`);
+    console.log(`[Job ${jobId}] Header set: ${contentDisposition}`);
+
+    // 使用 sendFile 替代 download 以防止 Header 被 Express 内部重写
+    res.sendFile(path.resolve(job.outputPath), (err) => {
+      if (err) {
+        console.error(`[Job ${jobId}] Download failed:`, err);
+      } else {
+        console.log(`[Job ${jobId}] Download successful, cleaning up...`);
+      }
+      
+      // 无论成功失败都执行清理
       if (job.outputPath && fs.existsSync(job.outputPath)) {
         fs.unlinkSync(job.outputPath);
       }
