@@ -1,5 +1,5 @@
 {
-  "name": "backend",
+  "name": "toolbox-web-backend",
   "version": "1.0.0",
   "description": "ToolBox-Web Backend API Server",
   "main": "dist/server.js",
