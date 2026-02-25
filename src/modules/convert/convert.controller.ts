@@ -313,7 +313,16 @@ export class ConvertController {
     const token = req.query.token as string;
     const job = convertJobs.get(jobId);
 
-    if (!job || !job.outputPath || job.token !== token) {
+    console.log(`[Download Attempt] Job: ${jobId}, Token: ${token}`);
+
+    if (!job) {
+      console.error(`[Download Failed] Task ${jobId} not found`);
+      res.status(404).json({ success: false, message: '未找到任务' });
+      return;
+    }
+
+    if (job.status !== 'completed' || !job.token || job.token !== token) {
+      console.error(`[Download Failed] Invalid creds for ${jobId}. Expected Token: ${job.token}, Got: ${token}, Status: ${job.status}`);
       res.status(403).json({ success: false, message: '无效凭证' });
       return;
     }
@@ -331,7 +340,7 @@ export class ConvertController {
     res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
-    res.sendFile(path.resolve(job.outputPath), (err) => {
+    res.sendFile(path.resolve(job.outputPath!), (err) => {
       if (!err) {
         const jobDir = path.dirname(job.outputPath!);
         if (jobDir.includes('job_')) fs.rmSync(jobDir, { recursive: true, force: true });

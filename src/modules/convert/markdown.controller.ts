@@ -66,9 +66,8 @@ export class MarkdownController {
       </html>
     `;
 
-    // 使用系统 Chromium 启动 Puppeteer
     const browser = await puppeteer.launch({
-      executablePath: '/usr/bin/chromium-browser', // Docker 中的路径
+      executablePath: '/usr/bin/chromium-browser',
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
@@ -102,7 +101,10 @@ export class MarkdownController {
     if (!job) return res.status(404).json({ success: false });
     
     res.json({
-      ...job,
+      success: true,
+      jobId,
+      status: job.status,
+      token: job.token, // 确保前端能拿到 Token
       downloadUrl: job.status === 'completed' ? `/api/convert/md/download/${jobId}?token=${job.token}` : undefined
     });
   }
@@ -112,10 +114,21 @@ export class MarkdownController {
     const token = req.query.token as string;
     const job = MarkdownController.jobs.get(jobId);
 
-    if (!job || job.token !== token) return res.status(403).send('Forbidden');
+    console.log(`[MD Download Attempt] Job: ${jobId}, Token: ${token}`);
 
-    const encodedFileName = encodeURIComponent(job.outputFileName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.outputFileName).replace(/['()]/g, '')}"; filename*=UTF-8''${encodedFileName}`);
+    if (!job || job.token !== token) {
+      console.error(`[MD Download Failed] Invalid. Expected: ${job?.token}, Got: ${token}`);
+      return res.status(403).json({ success: false, message: '无效凭证' });
+    }
+
+    const rawName = job.outputFileName;
+    const uriEncodedName = encodeURIComponent(rawName);
+    const rfc6266Name = uriEncodedName
+      .replace(/\(/g, '%28').replace(/\)/g, '%29')
+      .replace(/\!/g, '%21').replace(/\'/g, '%27')
+      .replace(/\*/g, '%2A');
+
+    res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
     res.sendFile(path.resolve(job.outputPath), () => {
       fs.rmSync(path.dirname(job.outputPath), { recursive: true, force: true });
       MarkdownController.jobs.delete(jobId);
