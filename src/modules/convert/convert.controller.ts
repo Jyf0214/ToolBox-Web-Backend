@@ -279,8 +279,8 @@ export class ConvertController {
   }
 
   public downloadFile(req: Request, res: Response) {
-    const { jobId } = req.params;
-    const { token } = req.query;
+    const jobId = req.params.jobId as string;
+    const token = req.query.token as string;
     const job = convertJobs.get(jobId);
 
     console.log(`[Download Attempt] Job: ${jobId}, Token: ${token}`);
