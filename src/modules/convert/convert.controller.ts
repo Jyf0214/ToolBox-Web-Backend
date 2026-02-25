@@ -4,8 +4,24 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import util from 'util';
+import { v4 as uuidv4 } from 'uuid';
+import { generateDownloadToken } from '../shared/middlewares/token.middleware';
 
 const execAsync = util.promisify(exec);
+
+interface ConvertJob {
+  id: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  inputPath: string;
+  outputPath?: string;
+  outputFileName: string;
+  token?: string;
+  error?: string;
+  createdAt: number;
+}
+
+// 转换任务存储 (内存，生产环境应用 Redis)
+const convertJobs = new Map<string, ConvertJob>();
 
 /**
  * 文件转换控制器
@@ -20,34 +36,177 @@ export class ConvertController {
       return res.status(400).json({ success: false, message: '请上传文件' });
     }
 
+    const jobId = uuidv4();
     const tempDir = os.tmpdir();
     const inputPath = req.file.path;
     const outputDir = path.join(tempDir, `output_${Date.now()}`);
-    
+    const originalName = path.parse(req.file.originalname).name;
+
+    const job: ConvertJob = {
+      id: jobId,
+      status: 'pending',
+      inputPath,
+      outputFileName: `${originalName}.pdf`,
+      createdAt: Date.now(),
+    };
+
+    convertJobs.set(jobId, job);
+
+    // 异步处理转换
+    this.processConversion(jobId, inputPath, outputDir, originalName)
+      .catch((error) => {
+        console.error('转换出错:', error);
+        const failedJob = convertJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.error = error instanceof Error ? error.message : '未知错误';
+          convertJobs.set(jobId, failedJob);
+        }
+      });
+
+    res.status(202).json({
+      success: true,
+      message: '转换任务已提交',
+      jobId,
+      statusUrl: `/api/convert/status/${jobId}`,
+    });
+  }
+
+  /**
+   * 处理转换任务
+   */
+  private async processConversion(
+    jobId: string,
+    inputPath: string,
+    outputDir: string,
+    originalName: string
+  ) {
+    const job = convertJobs.get(jobId);
+    if (!job) return;
+
     try {
-      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+      job.status = 'processing';
+      convertJobs.set(jobId, job);
+
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
 
       // 调用 LibreOffice 命令行进行转换
       const command = `libreoffice --headless --convert-to pdf --outdir "${outputDir}" "${inputPath}"`;
       await execAsync(command);
 
       // 获取生成的文件路径
-      const originalName = path.parse(req.file.originalname).name;
       const pdfPath = path.join(outputDir, `${originalName}.pdf`);
 
-      if (fs.existsSync(pdfPath)) {
-        res.download(pdfPath, `${originalName}.pdf`, (err) => {
-          // 清理临时文件
-          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-          if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
-        });
-      } else {
+      if (!fs.existsSync(pdfPath)) {
         throw new Error('转换失败：PDF 文件未生成');
       }
+
+      // 生成一次性下载 token
+      const token = generateDownloadToken('anonymous');
+      job.status = 'completed';
+      job.outputPath = pdfPath;
+      job.token = token;
+      convertJobs.set(jobId, job);
+
+      // 清理临时输入文件
+      if (fs.existsSync(inputPath)) {
+        fs.unlinkSync(inputPath);
+      }
     } catch (error) {
-      console.error('转换出错:', error);
-      next(error);
+      job.status = 'failed';
+      job.error = error instanceof Error ? error.message : '未知错误';
+      convertJobs.set(jobId, job);
+
+      // 清理临时文件
+      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * 查询转换状态
+   */
+  public async getStatus(req: Request, res: Response) {
+    const { jobId } = req.params;
+    const job = convertJobs.get(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: '未找到转换任务',
+      });
+    }
+
+    const response: any = {
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      outputFileName: job.outputFileName,
+    };
+
+    if (job.status === 'completed' && job.token) {
+      response.downloadToken = job.token;
+      response.downloadUrl = `/api/convert/download/${jobId}?token=${job.token}`;
+    }
+
+    if (job.status === 'failed') {
+      response.error = job.error;
+    }
+
+    res.json(response);
+  }
+
+  /**
+   * 下载转换后的文件 (需要 token 验证)
+   */
+  public async downloadFile(req: Request, res: Response) {
+    const { jobId } = req.params;
+    const token = req.query.token as string;
+
+    const job = convertJobs.get(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: '未找到转换任务',
+      });
+    }
+
+    if (job.status !== 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: '文件尚未转换完成',
+      });
+    }
+
+    if (!token || !job.token || token !== job.token) {
+      return res.status(403).json({
+        success: false,
+        message: '下载凭证无效或已失效',
+      });
+    }
+
+    if (!job.outputPath || !fs.existsSync(job.outputPath)) {
+      return res.status(404).json({
+        success: false,
+        message: '文件不存在或已过期',
+      });
+    }
+
+    // 发送文件并清理
+    res.download(job.outputPath, job.outputFileName, () => {
+      // 下载完成后清理
+      if (job.outputPath && fs.existsSync(job.outputPath)) {
+        fs.unlinkSync(job.outputPath);
+      }
+      const outputDir = path.dirname(job.outputPath!);
+      if (fs.existsSync(outputDir)) {
+        fs.rmSync(outputDir, { recursive: true, force: true });
+      }
+      convertJobs.delete(jobId);
+    });
   }
 }
 
