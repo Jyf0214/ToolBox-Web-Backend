@@ -1,19 +1,13 @@
 import app from './app';
-import { connectDatabase } from './config/db.config';
 
 // 默认使用 7860 端口
-const PORT = process.env.PORT || 7860;
+const PORT = process.env.PORT ?? 7860;
 
 /**
  * 启动服务
  */
-const startServer = async () => {
+const startServer = () => {
   try {
-    // 数据库连接可选，未启用时也能运行
-    await connectDatabase().catch((err) => {
-      console.warn('⚠️  数据库连接失败，将以无数据库模式运行:', err.message);
-    });
-
     const server = app.listen(PORT, () => {
       console.log(`🚀 服务器已启动：http://localhost:${PORT}`);
       console.log(`📝 健康检查：http://localhost:${PORT}/health`);

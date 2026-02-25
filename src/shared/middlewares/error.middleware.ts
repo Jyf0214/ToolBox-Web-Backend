@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 /**
  * 通用错误类型定义
@@ -18,9 +18,9 @@ export class AppError extends Error {
 /**
  * 全局错误处理中间件
  */
-export function errorHandler(err: Error | AppError, req: Request, res: Response, next: NextFunction): void {
+export function errorHandler(err: Error | AppError, req: Request, res: Response, _next: NextFunction): void {
   if (res.headersSent) {
-    return next(err);
+    return _next(err);
   }
 
   if (err instanceof AppError) {
@@ -44,7 +44,7 @@ export function errorHandler(err: Error | AppError, req: Request, res: Response,
 /**
  * 404 错误处理
  */
-export function notFoundHandler(req: Request, res: Response, next: NextFunction): void {
+export function notFoundHandler(req: Request, res: Response, _next: NextFunction): void {
   res.status(404).json({
     success: false,
     message: `请求路径不存在：${req.originalUrl}`,
