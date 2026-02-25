@@ -14,7 +14,6 @@ import { generateDownloadToken } from '../../shared/middlewares/token.middleware
 
 const execAsync = util.promisify(exec);
 
-// 配置并发 Worker 数量
 const CONCURRENCY_LIMIT = 5;
 
 interface ConvertJob {
@@ -208,10 +207,11 @@ export class ConvertController {
     job.progress = { total: allFiles.length, current: 0, message: `正在启动并发转换 (5 Workers)...` };
     convertJobs.set(job.id, job);
 
-    const outZip = new AdmZip();
     const limit = pLimit(CONCURRENCY_LIMIT);
+    // 存储转换结果：{ 原相对路径: 生成的PDF绝对路径 }
+    const results: { relativePath: string; pdfPath: string }[] = [];
 
-    // 并发执行转换任务，限制 5 个 worker
+    // 并发执行转换，但不操作 AdmZip
     const tasks = allFiles.map((file) => 
       limit(async () => {
         const relativePath = path.relative(unzipDir, file);
@@ -219,15 +219,11 @@ export class ConvertController {
         
         try {
           const pdfPath = await this.convertDocxToPdf(file, fileOutDir, makeEven);
-          const zipEntryPath = path.join(path.dirname(relativePath));
+          results.push({ relativePath, pdfPath });
           
-          // 注意：AdmZip.addLocalFile 不是线程安全的，但在 Node 单线程事件循环中可以配合 await 使用
-          outZip.addLocalFile(pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
-          
-          // 安全更新进度
           if (job.progress) {
             job.progress.current++;
-            job.progress.message = `正在处理: ${path.basename(file)} (${job.progress.current}/${job.progress.total})`;
+            job.progress.message = `转换中: ${path.basename(file)} (${job.progress.current}/${job.progress.total})`;
             convertJobs.set(job.id, job);
           }
         } catch (err: any) {
@@ -238,28 +234,36 @@ export class ConvertController {
 
     await Promise.all(tasks);
 
+    // 在主循环中顺序添加文件到压缩包，彻底解决 AdmZip 的并发空洞问题
+    job.progress!.message = '正在重新封装压缩包...';
+    convertJobs.set(job.id, job);
+    
+    const outZip = new AdmZip();
+    for (const res of results) {
+      const zipEntryPath = path.dirname(res.relativePath);
+      outZip.addLocalFile(res.pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
+    }
+
     const finalZipPath = path.join(tempBaseDir, job.outputFileName);
     outZip.writeZip(finalZipPath);
     job.outputPath = finalZipPath;
+    
+    // 清理临时目录
+    fs.rmSync(unzipDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
   }
 
   private async convertDocxToPdf(docxPath: string, outDir: string, makeEven: boolean): Promise<string> {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     
-    // 关键修复：为每个进程分配独立的 UserInstallation 路径，绕过 LibreOffice 的单实例锁
-    // 这样 5 个 Worker 才能真正同时运行
     const profileId = uuidv4();
     const userProfileDir = path.join(os.tmpdir(), `libre_profile_${profileId}`);
-    
     const command = `libreoffice -env:UserInstallation=file://${userProfileDir} --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
     
     try {
       await execAsync(command);
     } finally {
-      // 转换结束后立即清理配置文件目录，防止磁盘撑爆
-      if (fs.existsSync(userProfileDir)) {
-        fs.rmSync(userProfileDir, { recursive: true, force: true });
-      }
+      if (fs.existsSync(userProfileDir)) fs.rmSync(userProfileDir, { recursive: true, force: true });
     }
 
     const originalName = path.parse(docxPath).name;
@@ -323,7 +327,7 @@ export class ConvertController {
       .replace(/\'/g, '%27')
       .replace(/\*/g, '%2A');
 
-    res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
+    res.setHeader('Content-Disposition', `attachment; filename="${rawName}"; filename*=UTF-8''${rfc6266Name}`);
     res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 

@@ -1,6 +1,5 @@
+import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
-
-import type { Request, Response, NextFunction } from 'express';
 
 interface TokenData {
   userId: string;
@@ -14,17 +13,17 @@ interface TokenData {
 const activeTokens = new Map<string, TokenData>();
 
 /**
- * Token 有效期 (默认 1 小时)
+ * Token 有效期 (延长至 15 分钟)
  */
-const TOKEN_EXPIRY = 60 * 60 * 1000;
+const TOKEN_EXPIRY = 15 * 60 * 1000;
 
 /**
- * 最大下载次数
+ * 最大下载次数 (设为 100，相当于有效期内不限次)
  */
-const MAX_DOWNLOAD_COUNT = 5;
+const MAX_DOWNLOAD_COUNT = 100;
 
 /**
- * 生成一次性下载 Token
+ * 生成下载 Token
  * @param userId 用户 ID
  * @returns Token 字符串
  */
@@ -123,7 +122,7 @@ export function verifyAndDownload(req: Request, res: Response, filePath: string,
   activeTokens.set(token, tokenData);
 
   res.download(filePath, fileName, (_err) => {
-    // 清理逻辑可根据需要添加
+    // 清理逻辑
   });
 }
 
