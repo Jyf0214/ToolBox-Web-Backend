@@ -25,10 +25,11 @@ model User {
   role          Role       @default(USER)
   status        UserStatus @default(ACTIVE)
   emailVerified Boolean    @default(false)
+  avatar        String?    @db.Text
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
   logs          AuditLog[]
-  images        Image[]
+  images    Image[]
 }
 
 model Image {

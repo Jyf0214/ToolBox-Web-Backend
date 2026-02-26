@@ -17,6 +17,7 @@ export interface IUser extends Document {
   role: UserRole;
   status: UserStatus;
   emailVerified: boolean;
+  avatar?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,6 +29,7 @@ const UserSchema: Schema = new Schema({
   role: { type: String, enum: Object.values(UserRole), default: UserRole.USER },
   status: { type: String, enum: Object.values(UserStatus), default: UserStatus.ACTIVE },
   emailVerified: { type: Boolean, default: false },
+  avatar: { type: String },
 }, { timestamps: true });
 
 export default mongoose.models.User || mongoose.model<IUser>('User', UserSchema);

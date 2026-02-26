@@ -134,15 +134,15 @@ export class UserController {
   public updateProfile = async (req: any, res: Response, next: NextFunction) => {
     try {
       const userId = req.user.id || req.user._id;
-      const { avatarUrl } = req.body;
+      const { avatar } = req.body;
       const dbType = DatabaseManager.getType();
 
       if (dbType === 'mongodb') {
-        await MongoUser.findByIdAndUpdate(userId, { avatar: avatarUrl });
+        await MongoUser.findByIdAndUpdate(userId, { avatar });
       } else {
         await DatabaseManager.getPrisma().user.update({
           where: { id: Number(userId) },
-          data: { email: avatarUrl } // 暂借 email 字段演示或应扩展 schema
+          data: { avatar }
         });
       }
       res.json({ success: true, message: '个人资料已更新' });
