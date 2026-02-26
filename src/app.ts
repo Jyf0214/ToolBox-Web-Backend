@@ -6,6 +6,8 @@ import express, { json, urlencoded } from 'express';
 import convertRoutes from './modules/convert/convert.routes';
 import userRoutes from './modules/user/user.routes';
 import configRoutes from './modules/config/config.routes';
+import imageRoutes from './modules/image/image.routes';
+import logRoutes from './modules/log/log.routes';
 import { errorHandler, notFoundHandler } from './shared/middlewares/error.middleware';
 import { rateLimit } from './shared/middlewares/validation.middleware';
 
@@ -36,6 +38,8 @@ app.use(rateLimit(100, 60000));
 app.use('/api/users', userRoutes);
 app.use('/api/convert', convertRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/images', imageRoutes);
+app.use('/api/logs', logRoutes);
 
 // 后端首页欢迎信息
 app.get('/', (req, res) => {

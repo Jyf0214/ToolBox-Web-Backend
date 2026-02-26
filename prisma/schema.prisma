@@ -13,17 +13,40 @@ enum Role {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String?  @unique
-  username  String   @unique
+  id        Int        @id @default(autoincrement())
+  email     String?    @unique
+  username  String     @unique
   password  String
-  role      Role     @default(USER)
+  role      Role       @default(USER)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  logs      AuditLog[]
+  images    Image[]
+}
+
+model Image {
+  id        Int      @id @default(autoincrement())
+  title     String
+  category  String   @default("default")
+  url       String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model Config {
   key       String   @id
   value     String   @db.Text
   updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  action    String
+  module    String
+  ip        String?
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id])
+  details   String?  @db.Text
+  createdAt DateTime @default(now())
 }

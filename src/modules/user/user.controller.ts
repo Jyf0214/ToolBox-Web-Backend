@@ -141,10 +141,54 @@ export class UserController {
         users = await MongoUser.find({}, '-password');
       } else if (dbType === 'mysql') {
         users = await DatabaseManager.getPrisma().user.findMany({
-          select: { id: true, username: true, role: true, createdAt: true }
+          select: { id: true, username: true, role: true, createdAt: true, email: true }
         });
       }
       res.json({ success: true, data: users });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * 删除用户
+   */
+  public deleteUser = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const dbType = DatabaseManager.getType();
+
+      if (dbType === 'mongodb') {
+        await MongoUser.findByIdAndDelete(id);
+      } else if (dbType === 'mysql') {
+        await DatabaseManager.getPrisma().user.delete({ where: { id: Number(id) } });
+      }
+
+      res.json({ success: true, message: '用户已删除' });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * 修改用户角色
+   */
+  public updateRole = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+      const dbType = DatabaseManager.getType();
+
+      if (dbType === 'mongodb') {
+        await MongoUser.findByIdAndUpdate(id, { role });
+      } else if (dbType === 'mysql') {
+        await DatabaseManager.getPrisma().user.update({
+          where: { id: Number(id) },
+          data: { role }
+        });
+      }
+
+      res.json({ success: true, message: '角色已更新' });
     } catch (error) {
       next(error);
     }
