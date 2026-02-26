@@ -3,30 +3,49 @@ import nodemailer from 'nodemailer';
 import { DatabaseManager } from '../../config/db.config';
 import MongoConfig from './config.model';
 
-export interface SmtpConfig {
-  host: string;
-  port: number;
-  user: string;
-  pass: string;
-  from: string;
-  secure: boolean;
+export type ConfigType = 'text' | 'password' | 'number' | 'switch' | 'select' | 'multi-select';
+
+export interface ConfigSchemaItem {
+  key: string;
+  label: string;
+  type: ConfigType;
+  group: string;
+  defaultValue: any;
+  options?: { label: string; value: any }[];
+  rules?: { required?: boolean; min?: number; max?: number; pattern?: string; message?: string }[];
+  placeholder?: string;
+  tooltip?: string;
 }
 
-export interface AccessConfig {
-  allow_non_admin_registration: boolean;
-  allow_guest_access: boolean;
-  free_user_quota: number;
-  guest_user_quota: number;
-  quota_unit: string;
-  guest_feature_whitelist: string[];
-  free_tier_features: string[];
-  max_verified_users: number; // 最大已验证用户数
-}
+const SYSTEM_CONFIG_SCHEMA: ConfigSchemaItem[] = [
+  { key: 'allow_non_admin_registration', label: '开放用户注册', type: 'switch', group: '访问控制', defaultValue: true },
+  { key: 'allow_guest_access', label: '允许游客使用', type: 'switch', group: '访问控制', defaultValue: true },
+  { key: 'max_verified_users', label: '最大注册用户数', type: 'number', group: '访问控制', defaultValue: 100, rules: [{ required: true, message: '必填' }] },
+  { key: 'free_user_quota', label: '免费用户额度', type: 'number', group: '额度与单位', defaultValue: 10 },
+  { key: 'guest_user_quota', label: '游客用户额度', type: 'number', group: '额度与单位', defaultValue: 3 },
+  { 
+    key: 'quota_unit', label: '额度单位', type: 'select', group: '额度与单位', defaultValue: 'calls/day',
+    options: [{ label: '次数/天', value: 'calls/day' }, { label: 'MB/天', value: 'MB/day' }]
+  },
+  { key: 'smtp_host', label: 'SMTP 服务器', type: 'text', group: '邮件服务', defaultValue: '', placeholder: 'smtp.example.com' },
+  { key: 'smtp_port', label: '端口', type: 'number', group: '邮件服务', defaultValue: 465 },
+  { key: 'smtp_user', label: '发件账号', type: 'text', group: '邮件服务', defaultValue: '' },
+  { key: 'smtp_pass', label: '授权码/密码', type: 'password', group: '邮件服务', defaultValue: '' },
+  { key: 'smtp_secure', label: '启用 SSL', type: 'switch', group: '邮件服务', defaultValue: true },
+  { 
+    key: 'guest_features', label: '游客可用功能', type: 'multi-select', group: '权限白名单', defaultValue: ['convert'],
+    options: [{ label: '文档转换', value: 'convert' }, { label: 'Markdown', value: 'markdown' }]
+  },
+  { 
+    key: 'free_features', label: '免费用户功能', type: 'multi-select', group: '权限白名单', defaultValue: ['convert', 'markdown'],
+    options: [{ label: '文档转换', value: 'convert' }, { label: 'Markdown', value: 'markdown' }]
+  }
+];
 
 export class ConfigController {
-  private static KEY_SMTP = 'smtp_config';
-  private static KEY_ACCESS = 'access_config';
-
+  /**
+   * 暴露静态方法供其他模块 (如 UserController) 调用
+   */
   public static getConfig = async (key: string) => {
     const dbType = DatabaseManager.getType();
     let value = null;
@@ -37,81 +56,67 @@ export class ConfigController {
       const doc = await DatabaseManager.getPrisma().config.findUnique({ where: { key } });
       value = doc?.value;
     }
-    return value ? JSON.parse(value) : null;
-  };
-
-  private static setConfig = async (key: string, value: any) => {
-    const dbType = DatabaseManager.getType();
-    const valueStr = JSON.stringify(value);
-    if (dbType === 'mongodb') {
-      await MongoConfig.findOneAndUpdate({ key }, { value: valueStr }, { upsert: true });
-    } else if (dbType === 'mysql') {
-      await DatabaseManager.getPrisma().config.upsert({
-        where: { key },
-        update: { value: valueStr },
-        create: { key, value: valueStr }
-      });
+    try {
+      return value ? JSON.parse(value) : null;
+    } catch {
+      return value;
     }
   };
 
-  public getSmtpConfig = async (_req: Request, res: Response, next: NextFunction) => {
+  public getSchema = async (_req: Request, res: Response) => {
+    res.json({ success: true, data: SYSTEM_CONFIG_SCHEMA });
+  };
+
+  public getAllConfigs = async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const config = await ConfigController.getConfig(ConfigController.KEY_SMTP);
-      if (config && config.pass) config.pass = '********';
-      res.json({ success: true, data: config });
+      const dbType = DatabaseManager.getType();
+      let dbConfigs: any[] = [];
+      if (dbType === 'mongodb') dbConfigs = await MongoConfig.find({});
+      else if (dbType === 'mysql') dbConfigs = await DatabaseManager.getPrisma().config.findMany();
+
+      const values: Record<string, any> = {};
+      SYSTEM_CONFIG_SCHEMA.forEach(item => { values[item.key] = item.defaultValue; });
+      dbConfigs.forEach(c => {
+        try { values[c.key] = JSON.parse(c.value); } catch { values[c.key] = c.value; }
+      });
+      SYSTEM_CONFIG_SCHEMA.filter(s => s.type === 'password').forEach(s => {
+        if (values[s.key]) values[s.key] = '********';
+      });
+      res.json({ success: true, data: values });
     } catch (error) { next(error); }
   };
 
-  public updateSmtpConfig = async (req: Request, res: Response, next: NextFunction) => {
+  public updateConfigs = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await ConfigController.setConfig(ConfigController.KEY_SMTP, req.body);
-      res.json({ success: true, message: 'SMTP 配置已保存' });
-    } catch (error) { next(error); }
-  };
-
-  /**
-   * 获取访问与额度配置
-   */
-  public getAccessConfig = async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      let config = await ConfigController.getConfig(ConfigController.KEY_ACCESS);
-      // 默认值
-      if (!config) {
-        config = {
-          allow_non_admin_registration: true,
-          allow_guest_access: true,
-          free_user_quota: 10,
-          guest_user_quota: 3,
-          quota_unit: 'calls/day',
-          guest_feature_whitelist: ['convert'],
-          free_tier_features: ['convert', 'markdown'],
-          max_verified_users: 100
-        };
+      const updates = req.body;
+      const dbType = DatabaseManager.getType();
+      for (const [key, value] of Object.entries(updates)) {
+        const schema = SYSTEM_CONFIG_SCHEMA.find(s => s.key === key);
+        if (!schema) continue;
+        if (schema.type === 'password' && value === '********') continue;
+        const valueStr = JSON.stringify(value);
+        if (dbType === 'mongodb') {
+          await MongoConfig.findOneAndUpdate({ key }, { value: valueStr }, { upsert: true });
+        } else if (dbType === 'mysql') {
+          await DatabaseManager.getPrisma().config.upsert({
+            where: { key }, update: { value: valueStr }, create: { key, value: valueStr }
+          });
+        }
       }
-      res.json({ success: true, data: config });
-    } catch (error) { next(error); }
-  };
-
-  /**
-   * 更新访问与额度配置
-   */
-  public updateAccessConfig = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await ConfigController.setConfig(ConfigController.KEY_ACCESS, req.body);
-      res.json({ success: true, message: '访问配置已保存' });
+      res.json({ success: true, message: '配置已更新' });
     } catch (error) { next(error); }
   };
 
   public testSmtp = async (req: Request, res: Response) => {
     try {
-      const config: SmtpConfig = req.body;
-      if (config.pass === '********') {
-        const old = await ConfigController.getConfig(ConfigController.KEY_SMTP);
-        if (old) config.pass = old.pass;
+      const values = req.body;
+      let pass = values.smtp_pass;
+      if (pass === '********') {
+        pass = await ConfigController.getConfig('smtp_pass');
       }
       const transporter = nodemailer.createTransport({
-        host: config.host, port: config.port, secure: config.secure,
-        auth: { user: config.user, pass: config.pass }
+        host: values.smtp_host, port: values.smtp_port, secure: values.smtp_secure,
+        auth: { user: values.smtp_user, pass: pass }
       });
       await transporter.verify();
       res.json({ success: true, message: 'SMTP 连接成功' });

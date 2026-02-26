@@ -4,13 +4,14 @@ import { verifyToken, isAdmin } from '../../shared/middlewares/auth.middleware';
 
 const router = Router();
 
-// 所有配置接口均需管理员权限
-router.get('/smtp', verifyToken, isAdmin, configController.getSmtpConfig);
-router.post('/smtp', verifyToken, isAdmin, configController.updateSmtpConfig);
-router.post('/test-smtp', verifyToken, isAdmin, configController.testSmtp);
+// 元数据架构 (公开或带鉴权均可，此处设为带鉴权)
+router.get('/schema', verifyToken, isAdmin, configController.getSchema);
 
-// 访问控制配置
-router.get('/access', verifyToken, isAdmin, configController.getAccessConfig);
-router.post('/access', verifyToken, isAdmin, configController.updateAccessConfig);
+// 批量读写配置
+router.get('/all', verifyToken, isAdmin, configController.getAllConfigs);
+router.post('/batch', verifyToken, isAdmin, configController.updateConfigs);
+
+// 保留 SMTP 测试接口 (逻辑需微调，目前先放着)
+router.post('/test-smtp', verifyToken, isAdmin, configController.testSmtp);
 
 export default router;

@@ -10,6 +10,7 @@ import imageRoutes from './modules/image/image.routes';
 import logRoutes from './modules/log/log.routes';
 import { errorHandler, notFoundHandler } from './shared/middlewares/error.middleware';
 import { rateLimit } from './shared/middlewares/validation.middleware';
+import { verifyInternalKey } from './shared/middlewares/key.middleware';
 
 config();
 
@@ -33,6 +34,9 @@ app.use(urlencoded({ extended: true, limit: '10mb' }));
 
 // 全局限流
 app.use(rateLimit(100, 60000));
+
+// 🔐 前后端通信私有校验 (必须放在路由之前)
+app.use(verifyInternalKey);
 
 // 模块路由
 app.use('/api/users', userRoutes);
