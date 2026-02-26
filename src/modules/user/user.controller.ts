@@ -1,7 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { DatabaseManager } from '../../config/db.config';
 import MongoUser, { UserRole } from './user.model';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
 /**
  * 用户控制器：处理注册、登录等逻辑
@@ -9,7 +12,6 @@ import MongoUser, { UserRole } from './user.model';
 export class UserController {
   /**
    * 用户注册
-   * 逻辑：第一个注册的账户自动设为管理员
    */
   public register = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -22,15 +24,13 @@ export class UserController {
 
       const dbType = DatabaseManager.getType();
       if (dbType === 'none') {
-        res.status(503).json({ success: false, message: '系统未配置数据库，暂时无法注册' });
+        res.status(503).json({ success: false, message: '系统未配置数据库' });
         return;
       }
 
-      // 加密密码
       const hashedPassword = await bcrypt.hash(password, 10);
       let isFirstAdmin = false;
 
-      // --- 1. 检查是否存在管理员 (智能适配数据库) ---
       if (dbType === 'mongodb') {
         const adminExists = await MongoUser.findOne({ role: UserRole.ADMIN });
         if (!adminExists) isFirstAdmin = true;
@@ -40,13 +40,9 @@ export class UserController {
         if (!adminExists) isFirstAdmin = true;
       }
 
-      const role = isFirstAdmin ? 'ADMIN' : 'USER';
-
-      // --- 2. 创建用户 ---
-      let newUser;
       try {
         if (dbType === 'mongodb') {
-          newUser = await MongoUser.create({
+          await MongoUser.create({
             username,
             password: hashedPassword,
             email,
@@ -54,21 +50,14 @@ export class UserController {
           });
         } else {
           const prisma = DatabaseManager.getPrisma();
-          newUser = await prisma.user.create({
+          await prisma.user.create({
             data: {
               username,
               password: hashedPassword,
               email,
-              role: 'ADMIN' as any // Prisma enum 处理
+              role: isFirstAdmin ? 'ADMIN' : 'USER'
             }
           });
-          // 修正 Prisma Role
-          if (!isFirstAdmin) {
-            await prisma.user.update({
-              where: { id: (newUser as any).id },
-              data: { role: 'USER' }
-            });
-          }
         }
       } catch (err: any) {
         if (err.message?.includes('unique') || err.code === 11000 || err.code === 'P2002') {
@@ -80,11 +69,7 @@ export class UserController {
 
       res.status(201).json({
         success: true,
-        message: isFirstAdmin ? '首个账户注册成功，已自动设为管理员' : '用户注册成功',
-        data: {
-          username: (newUser as any).username,
-          role: (newUser as any).role
-        }
+        message: isFirstAdmin ? '首个账户注册成功，已自动设为管理员' : '用户注册成功'
       });
 
     } catch (error) {
@@ -93,13 +78,65 @@ export class UserController {
   };
 
   /**
-   * 示例：获取用户列表 (仅供调试)
+   * 用户登录
    */
+  public login = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { username, password } = req.body;
+      const dbType = DatabaseManager.getType();
+
+      let user: any = null;
+      if (dbType === 'mongodb') {
+        user = await MongoUser.findOne({ username });
+      } else if (dbType === 'mysql') {
+        user = await DatabaseManager.getPrisma().user.findUnique({ where: { username } });
+      }
+
+      if (!user) {
+        res.status(401).json({ success: false, message: '用户不存在' });
+        return;
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        res.status(401).json({ success: false, message: '密码错误' });
+        return;
+      }
+
+      // 签发 JWT
+      const token = jwt.sign(
+        { id: user.id || user._id, username: user.username, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.json({
+        success: true,
+        message: '登录成功',
+        data: {
+          token,
+          user: {
+            username: user.username,
+            role: user.role
+          }
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * 获取当前用户信息 (鉴权测试)
+   */
+  public getProfile = async (req: any, res: Response) => {
+    res.json({ success: true, data: req.user });
+  };
+
   public getUsers = async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const dbType = DatabaseManager.getType();
       let users = [];
-
       if (dbType === 'mongodb') {
         users = await MongoUser.find({}, '-password');
       } else if (dbType === 'mysql') {
@@ -107,7 +144,6 @@ export class UserController {
           select: { id: true, username: true, role: true, createdAt: true }
         });
       }
-
       res.json({ success: true, data: users });
     } catch (error) {
       next(error);

@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import { configController } from './config.controller';
+import { verifyToken, isAdmin } from '../../shared/middlewares/auth.middleware';
 
 const router = Router();
 
-/**
- * 暂定：此处应加入身份验证和权限校验中间件
- * 为了演示，先开放接口，生产环境必须配合 verifyToken, isAdmin 使用
- */
-router.get('/smtp', configController.getSmtpConfig);
-router.post('/smtp', configController.updateSmtpConfig);
-router.post('/test-smtp', configController.testSmtp);
+// 所有配置接口均需管理员权限
+router.get('/smtp', verifyToken, isAdmin, configController.getSmtpConfig);
+router.post('/smtp', verifyToken, isAdmin, configController.updateSmtpConfig);
+router.post('/test-smtp', verifyToken, isAdmin, configController.testSmtp);
 
 export default router;
