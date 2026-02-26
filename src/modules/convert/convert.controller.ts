@@ -15,7 +15,7 @@ import { generateDownloadToken } from '../../shared/middlewares/token.middleware
 const execAsync = util.promisify(exec);
 
 // 适当降低并发以换取极端稳定性，防止 OOM
-const CONCURRENCY_LIMIT = 3;
+const CONCURRENCY_LIMIT = 10;
 
 interface ConvertJob {
   id: string;
