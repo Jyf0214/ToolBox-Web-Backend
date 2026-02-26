@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
 export class UserController {
   /**
-   * 用户注册
+   * 用户注册：强制唯一性校验 (不区分大小写)
    */
   public register = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -20,6 +20,7 @@ export class UserController {
         return;
       }
 
+      const usernameLower = username.toLowerCase();
       const dbType = DatabaseManager.getType();
       if (dbType === 'none') {
         res.status(503).json({ success: false, message: '系统未配置数据库' });
@@ -39,20 +40,17 @@ export class UserController {
           reserved_usernames: ['admin', 'system', 'root']
         };
 
-        // 1. 检查是否允许开放注册
         if (!accessConfig.allow_non_admin_registration) {
           res.status(403).json({ success: false, message: '系统已关闭开放注册' });
           return;
         }
 
-        // 2. 检查保留用户名 (黑名单)
         const reserved = accessConfig.reserved_usernames || [];
-        if (reserved.map((n: string) => n.toLowerCase()).includes(username.toLowerCase())) {
-          res.status(403).json({ success: false, message: '该用户名已被系统保留，请更换其他名称' });
+        if (reserved.map((n: string) => n.toLowerCase()).includes(usernameLower)) {
+          res.status(403).json({ success: false, message: '该用户名已被系统保留' });
           return;
         }
 
-        // 3. 检查已验证用户上限
         let verifiedCount = 0;
         if (dbType === 'mongodb') {
           verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
@@ -61,7 +59,7 @@ export class UserController {
         }
 
         if (verifiedCount >= accessConfig.max_verified_users) {
-          res.status(429).json({ success: false, message: '已达到验证用户注册上限，请联系管理员' });
+          res.status(429).json({ success: false, message: '已达到验证用户注册上限' });
           return;
         }
       }
@@ -71,20 +69,26 @@ export class UserController {
       try {
         if (dbType === 'mongodb') {
           await MongoUser.create({
-            username, password: hashedPassword, email,
+            username, 
+            usernameLower, // 存入全小写索引
+            password: hashedPassword, 
+            email,
             role: isFirstAdmin ? UserRole.ADMIN : UserRole.USER
           });
         } else {
           await DatabaseManager.getPrisma().user.create({
             data: {
-              username, password: hashedPassword, email,
+              username,
+              usernameLower, // 存入全小写索引
+              password: hashedPassword, 
+              email,
               role: isFirstAdmin ? 'ADMIN' : 'USER'
             }
           });
         }
       } catch (err: any) {
         if (err.code === 11000 || err.code === 'P2002') {
-          res.status(409).json({ success: false, message: '用户名已存在' });
+          res.status(409).json({ success: false, message: '用户名已被占用 (不区分大小写)' });
           return;
         }
         throw err;
@@ -95,16 +99,17 @@ export class UserController {
   };
 
   /**
-   * 登录校验
+   * 登录校验：支持不区分大小写的输入匹配
    */
   public login = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { username, password } = req.body;
+      const usernameLower = username.toLowerCase(); // 统一转小写匹配
       const dbType = DatabaseManager.getType();
       let user: any = null;
 
-      if (dbType === 'mongodb') user = await MongoUser.findOne({ username });
-      else user = await DatabaseManager.getPrisma().user.findUnique({ where: { username } });
+      if (dbType === 'mongodb') user = await MongoUser.findOne({ usernameLower });
+      else user = await DatabaseManager.getPrisma().user.findUnique({ where: { usernameLower } });
 
       if (!user) {
         res.status(401).json({ success: false, message: '用户不存在' });
@@ -139,7 +144,7 @@ export class UserController {
   };
 
   /**
-   * 更新个人资料 (头像等)
+   * 更新个人资料
    */
   public updateProfile = async (req: any, res: Response, next: NextFunction) => {
     try {
@@ -160,7 +165,7 @@ export class UserController {
   };
 
   /**
-   * 切换用户状态 (封禁/激活)
+   * 切换用户状态
    */
   public toggleStatus = async (req: Request, res: Response, next: NextFunction) => {
     try {

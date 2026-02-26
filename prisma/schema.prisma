@@ -20,7 +20,8 @@ enum UserStatus {
 model User {
   id            Int        @id @default(autoincrement())
   email         String?    @unique
-  username      String     @unique
+  username      String     // 原始显示名 (保留大小写)
+  usernameLower String     @unique // 唯一标识 (全小写)，用于防止冒用
   password      String
   role          Role       @default(USER)
   status        UserStatus @default(ACTIVE)

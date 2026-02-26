@@ -12,6 +12,7 @@ export enum UserStatus {
 
 export interface IUser extends Document {
   username: string;
+  usernameLower: string;
   email?: string;
   password: string;
   role: UserRole;
@@ -23,7 +24,8 @@ export interface IUser extends Document {
 }
 
 const UserSchema: Schema = new Schema({
-  username: { type: String, required: true, unique: true },
+  username: { type: String, required: true },
+  usernameLower: { type: String, required: true, unique: true, index: true },
   email: { type: String, unique: true, sparse: true },
   password: { type: String, required: true },
   role: { type: String, enum: Object.values(UserRole), default: UserRole.USER },
