@@ -44,12 +44,17 @@ export class DatabaseManager {
 
   private static async connectMySQL() {
     try {
-      // Prisma 6.x 会自动读取环境变量中的 DATABASE_URL
       this.prismaInstance = new PrismaClient();
       await this.prismaInstance.$connect();
       console.log('✅ MySQL (Prisma 6.x) 连接成功');
-    } catch (err) {
-      console.error('❌ MySQL 连接失败:', err);
+    } catch (err: any) {
+      console.error('❌ MySQL 连接失败:', err.message || err);
+      
+      // 针对 TiDB Cloud / AWS RDS 等强制 SSL 的数据库提供建议
+      if (err.message?.includes('insecure transport') || err.message?.includes('SSL')) {
+        console.warn('💡 提示: 您的数据库强制要求安全连接。请尝试在 DATABASE_URL 末尾添加 ?sslaccept=strict 或 ?sslmode=no-verify');
+      }
+      
       this.prismaInstance = null;
     }
   }
