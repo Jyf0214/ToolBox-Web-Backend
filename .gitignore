@@ -24,3 +24,5 @@ tmp/
 *.key
 *.cert
 *.prv
+
+/src/generated/prisma

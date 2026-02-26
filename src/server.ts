@@ -1,4 +1,5 @@
 import app from './app';
+import { DatabaseManager } from './config/db.config';
 
 // 默认使用 7860 端口
 const PORT = process.env.PORT ?? 7860;
@@ -6,8 +7,11 @@ const PORT = process.env.PORT ?? 7860;
 /**
  * 启动服务
  */
-const startServer = () => {
+const startServer = async () => {
   try {
+    // 初始化数据库
+    await DatabaseManager.connect();
+
     const server = app.listen(PORT, () => {
       console.log(`🚀 服务器已启动：http://localhost:${PORT}`);
       console.log(`📝 健康检查：http://localhost:${PORT}/health`);
