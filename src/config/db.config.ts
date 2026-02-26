@@ -43,27 +43,40 @@ export class DatabaseManager {
   }
 
   private static async connectMySQL() {
-    let url = process.env.DATABASE_URL || '';
+    const originalUrl = process.env.DATABASE_URL || '';
+    let secureUrl = originalUrl;
     
-    // 🛡️ 自动要求加密：如果用户提供的是不安全的 MySQL 连接，自动补全 SSL 参数
-    if (url.startsWith('mysql://') && !url.includes('sslaccept') && !url.includes('sslmode')) {
-      const separator = url.includes('?') ? '&' : '?';
-      url = `${url}${separator}sslaccept=strict`;
-      console.log('🛡️  检测到不安全的连接，已自动开启 MySQL 安全传输模式 (SSL)');
+    // 🛡️ 步骤 1：准备安全链接
+    if (originalUrl.startsWith('mysql://') && !originalUrl.includes('sslaccept') && !originalUrl.includes('sslmode')) {
+      const separator = originalUrl.includes('?') ? '&' : '?';
+      secureUrl = `${originalUrl}${separator}sslaccept=strict`;
     }
 
     try {
-      // 覆盖环境变量，确保 Prisma 使用加密后的 URL
-      this.prismaInstance = new PrismaClient({
-        datasources: {
-          db: { url }
-        }
-      });
+      // 🚀 优先尝试安全连接
+      if (secureUrl !== originalUrl) {
+        console.log('🛡️  正在尝试开启安全传输模式 (SSL)...');
+      }
+      this.prismaInstance = new PrismaClient({ datasources: { db: { url: secureUrl } } });
       await this.prismaInstance.$connect();
-      console.log('✅ MySQL (Prisma 6.x) 连接成功');
+      console.log('✅ MySQL 连接成功 (安全模式)');
     } catch (err: any) {
-      console.error('❌ MySQL 连接失败:', err.message || err);
-      this.prismaInstance = null;
+      if (secureUrl !== originalUrl) {
+        console.warn('⚠️  安全连接失败，正在自动回退到原始连接模式...');
+        try {
+          // ↩️ 步骤 2：回退到原始连接
+          if (this.prismaInstance) await this.prismaInstance.$disconnect();
+          this.prismaInstance = new PrismaClient({ datasources: { db: { url: originalUrl } } });
+          await this.prismaInstance.$connect();
+          console.log('✅ MySQL 连接成功 (回退原始模式)');
+        } catch (fallbackErr: any) {
+          console.error('❌ MySQL 最终连接失败:', fallbackErr.message || fallbackErr);
+          this.prismaInstance = null;
+        }
+      } else {
+        console.error('❌ MySQL 连接失败:', err.message || err);
+        this.prismaInstance = null;
+      }
     }
   }
 
