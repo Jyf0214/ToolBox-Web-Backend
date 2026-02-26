@@ -1,5 +1,9 @@
+import { exec } from 'child_process';
+import util from 'util';
 import mongoose from 'mongoose';
 import { PrismaClient } from '@prisma/client';
+
+const execAsync = util.promisify(exec);
 
 /**
  * 数据库适配器配置 (Prisma 6.x 智能适配版)
@@ -46,29 +50,39 @@ export class DatabaseManager {
     const originalUrl = process.env.DATABASE_URL || '';
     let secureUrl = originalUrl;
     
-    // 🛡️ 步骤 1：准备安全链接
     if (originalUrl.startsWith('mysql://') && !originalUrl.includes('sslaccept') && !originalUrl.includes('sslmode')) {
       const separator = originalUrl.includes('?') ? '&' : '?';
       secureUrl = `${originalUrl}${separator}sslaccept=strict`;
     }
 
-    try {
-      // 🚀 优先尝试安全连接
-      if (secureUrl !== originalUrl) {
-        console.log('🛡️  正在尝试开启安全传输模式 (SSL)...');
-      }
-      this.prismaInstance = new PrismaClient({ datasources: { db: { url: secureUrl } } });
+    const tryConnectAndSync = async (targetUrl: string, modeName: string) => {
+      this.prismaInstance = new PrismaClient({ datasources: { db: { url: targetUrl } } });
       await this.prismaInstance.$connect();
-      console.log('✅ MySQL 连接成功 (安全模式)');
+      console.log(`✅ MySQL 连接成功 (${modeName})`);
+      
+      // 🚀 核心增加：自动处理数据库结构同步 (db push)
+      console.log('🔄 正在同步数据库结构 (prisma db push)...');
+      try {
+        const { stdout } = await execAsync(`DATABASE_URL="${targetUrl}" npx prisma db push --accept-data-loss`);
+        if (stdout.includes('already in sync')) {
+          console.log('✨ 数据库结构已是最新，无需更新');
+        } else {
+          console.log('✨ 数据库结构同步成功');
+        }
+      } catch (pushErr: any) {
+        console.warn('⚠️  数据库自动同步提醒 (可能缺少权限或环境限制):', pushErr.message);
+      }
+    };
+
+    try {
+      if (secureUrl !== originalUrl) console.log('🛡️  正在尝试开启安全传输模式 (SSL)...');
+      await tryConnectAndSync(secureUrl, '安全模式');
     } catch (err: any) {
       if (secureUrl !== originalUrl) {
         console.warn('⚠️  安全连接失败，正在自动回退到原始连接模式...');
         try {
-          // ↩️ 步骤 2：回退到原始连接
           if (this.prismaInstance) await this.prismaInstance.$disconnect();
-          this.prismaInstance = new PrismaClient({ datasources: { db: { url: originalUrl } } });
-          await this.prismaInstance.$connect();
-          console.log('✅ MySQL 连接成功 (回退原始模式)');
+          await tryConnectAndSync(originalUrl, '回退原始模式');
         } catch (fallbackErr: any) {
           console.error('❌ MySQL 最终连接失败:', fallbackErr.message || fallbackErr);
           this.prismaInstance = null;
