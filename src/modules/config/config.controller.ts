@@ -21,20 +21,20 @@ const SYSTEM_CONFIG_SCHEMA: ConfigSchemaItem[] = [
   { key: 'allow_non_admin_registration', label: '开放用户注册', type: 'switch', group: '访问控制', defaultValue: true },
   { key: 'allow_guest_access', label: '允许游客使用', type: 'switch', group: '访问控制', defaultValue: true },
   { key: 'max_verified_users', label: '最大注册用户数', type: 'number', group: '访问控制', defaultValue: 100, rules: [{ required: true, message: '必填' }] },
-  { 
-    key: 'allowed_email_domains', label: '允许的邮箱域名', type: 'multi-select', group: '访问控制', 
-    defaultValue: ['gmail.com', 'outlook.com', 'qq.com', '163.com', 'icloud.com'],
-    options: [
-      { label: 'gmail.com', value: 'gmail.com' },
-      { label: 'outlook.com', value: 'outlook.com' },
-      { label: 'qq.com', value: 'qq.com' },
-      { label: '163.com', value: '163.com' }
-    ],
-    tooltip: '仅允许这些后缀的邮箱注册，留空则不限制'
-  },
-  { 
-    key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
-    defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],
+    { key: 'allowed_email_domains', label: '允许的邮箱域名', type: 'multi-select', group: '访问控制', 
+      defaultValue: ['gmail.com', 'outlook.com', 'qq.com', '163.com', 'icloud.com'],
+      options: [
+        { label: 'gmail.com', value: 'gmail.com' },
+        { label: 'outlook.com', value: 'outlook.com' },
+        { label: 'qq.com', value: 'qq.com' },
+        { label: '163.com', value: '163.com' }
+      ],
+      tooltip: '仅允许这些后缀的邮箱注册，留空则不限制'
+    },
+    { key: 'allow_email_alias', label: '允许邮箱别名 (+)', type: 'switch', group: '访问控制', defaultValue: false, tooltip: '关闭后将禁止如 user+extra@domain.com 形式的邮箱注册' },
+    { 
+      key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
+      defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],
     options: [
       { label: 'admin', value: 'admin' },
       { label: 'system', value: 'system' },

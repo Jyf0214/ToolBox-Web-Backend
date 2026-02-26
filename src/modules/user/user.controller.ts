@@ -31,14 +31,15 @@ export class UserController {
       const userCount = dbType === 'mongodb' ? await MongoUser.countDocuments() : await DatabaseManager.getPrisma().user.count();
       if (userCount === 0) isFirstAdmin = true;
 
-      // --- 注册控制逻辑 ---
+        // --- 注册控制逻辑 ---
       if (!isFirstAdmin) {
         const config = await ConfigController.getConfig('access_config');
         const accessConfig = config ? JSON.parse(config) : { 
           allow_non_admin_registration: true,
           max_verified_users: 100,
           reserved_usernames: ['admin', 'system', 'root'],
-          allowed_email_domains: []
+          allowed_email_domains: [],
+          allow_email_alias: false
         };
 
         // 1. 检查是否允许开放注册
@@ -54,11 +55,21 @@ export class UserController {
           return;
         }
 
-        // 3. 检查邮箱域名白名单
+        // 3. 检查邮箱限制
         if (email) {
+          const emailParts = email.split('@');
+          const account = emailParts[0];
+          const domain = emailParts[1]?.toLowerCase();
+
+          // 3.1 检查邮箱别名 (+)
+          if (!accessConfig.allow_email_alias && account.includes('+')) {
+            res.status(403).json({ success: false, message: '系统禁止使用邮箱别名 (+) 进行注册' });
+            return;
+          }
+
+          // 3.2 检查域名白名单
           const allowedDomains = (accessConfig.allowed_email_domains || []) as string[];
           if (allowedDomains.length > 0) {
-            const domain = email.split('@')[1]?.toLowerCase();
             if (!domain || !allowedDomains.map(d => d.toLowerCase()).includes(domain)) {
               res.status(403).json({ 
                 success: false, 
