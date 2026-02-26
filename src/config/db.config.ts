@@ -1,7 +1,8 @@
 import { exec } from 'child_process';
 import util from 'util';
-import mongoose from 'mongoose';
+
 import { PrismaClient } from '@prisma/client';
+import mongoose from 'mongoose';
 
 const execAsync = util.promisify(exec);
 
@@ -47,7 +48,7 @@ export class DatabaseManager {
   }
 
   private static async connectMySQL() {
-    const originalUrl = process.env.DATABASE_URL || '';
+    const originalUrl = process.env.DATABASE_URL ?? '';
     let secureUrl = originalUrl;
     
     if (originalUrl.startsWith('mysql://') && !originalUrl.includes('sslaccept') && !originalUrl.includes('sslmode')) {
@@ -60,16 +61,13 @@ export class DatabaseManager {
       await this.prismaInstance.$connect();
       console.log(`✅ MySQL 连接成功 (${modeName})`);
       
-      // 🚀 核心增加：自动处理数据库结构同步 (db push)
       console.log('🔄 正在同步数据库结构...');
       try {
-        // 关键安全修复：1. 显式指定 schema 路径；2. 隐藏环境变量打印，防止泄露密码
         await execAsync(`npx prisma db push --accept-data-loss --schema ./prisma/schema.prisma`, {
           env: { ...process.env, DATABASE_URL: targetUrl }
         });
         console.log('✨ 数据库结构同步成功');
-      } catch (pushErr: any) {
-        // 关键安全修复：不打印 pushErr.message，因为它可能包含连接字符串
+      } catch {
         console.warn('⚠️  数据库结构同步未完全完成 (可能原因: 缺少 schema 文件、数据库权限不足或网络抖动)');
         console.log('ℹ️  提示：您可以检查 Docker 镜像中是否包含 ./prisma/schema.prisma 文件');
       }
@@ -78,18 +76,20 @@ export class DatabaseManager {
     try {
       if (secureUrl !== originalUrl) console.log('🛡️  正在尝试开启安全传输模式 (SSL)...');
       await tryConnectAndSync(secureUrl, '安全模式');
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (secureUrl !== originalUrl) {
         console.warn('⚠️  安全连接失败，正在自动回退到原始连接模式...');
         try {
           if (this.prismaInstance) await this.prismaInstance.$disconnect();
           await tryConnectAndSync(originalUrl, '回退原始模式');
-        } catch (fallbackErr: any) {
-          console.error('❌ MySQL 最终连接失败:', fallbackErr.message || fallbackErr);
+        } catch (fallbackErr: unknown) {
+          const errMsg = fallbackErr instanceof Error ? fallbackErr.message : 'Unknown';
+          console.error('❌ MySQL 最终连接失败:', errMsg);
           this.prismaInstance = null;
         }
       } else {
-        console.error('❌ MySQL 连接失败:', err.message || err);
+        const errMsg = err instanceof Error ? err.message : 'Unknown';
+        console.error('❌ MySQL 连接失败:', errMsg);
         this.prismaInstance = null;
       }
     }
