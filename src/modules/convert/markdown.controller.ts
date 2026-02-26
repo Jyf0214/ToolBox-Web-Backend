@@ -3,45 +3,38 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { exec } from 'child_process';
+import util from 'util';
 import MarkdownIt from 'markdown-it';
 import puppeteer from 'puppeteer';
 import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
 
-const md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  typographer: true
-});
+const execAsync = util.promisify(exec);
+const md = new MarkdownIt({ html: true, linkify: true, typographer: true });
 
-/**
- * Markdown 转 PDF 控制器
- */
+const OUTPUT_DIR_PREFIX = 'md_job_'; // 用于临时目录的前缀
+
 export class MarkdownController {
   private static jobs = new Map<string, any>();
 
   public async convert(req: Request, res: Response) {
-    const { content, title = 'document' } = req.body;
-    
-    if (!content) {
-      return res.status(400).json({ success: false, message: '内容不能为空' });
-    }
+    const { content, title = 'document', format = 'pdf' } = req.body;
+    if (!content) return res.status(400).json({ success: false, message: '内容不能为空' });
 
     const jobId = uuidv4();
-    const tempDir = path.join(os.tmpdir(), `md_${jobId}`);
+    const tempDir = path.join(os.tmpdir(), `${OUTPUT_DIR_PREFIX}${jobId}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
-    // 提交响应，开始异步处理
     res.status(202).json({ success: true, jobId });
 
-    this.processMdToPdf(jobId, content, title, tempDir).catch(err => {
+    this.processConversion(jobId, content, title, format.toLowerCase(), tempDir).catch(err => {
       console.error(`[MD Job ${jobId}] Failed:`, err);
       MarkdownController.jobs.set(jobId, { status: 'failed', error: err.message });
     });
   }
 
-  private async processMdToPdf(jobId: string, content: string, title: string, tempDir: string) {
+  private async processConversion(jobId: string, content: string, title: string, format: string, tempDir: string) {
     MarkdownController.jobs.set(jobId, { status: 'processing' });
-
     const htmlContent = md.render(content);
     const fullHtml = `
       <!DOCTYPE html>
@@ -50,7 +43,7 @@ export class MarkdownController {
         <meta charset="UTF-8">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
         <style>
-          body { font-family: 'Inter', -apple-system, sans-serif; line-height: 1.6; color: #333; padding: 20px; }
+          body { font-family: 'Inter', -apple-system, sans-serif; line-height: 1.6; color: #333; padding: 40px; background: #fff; }
           img { max-width: 100%; }
           pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }
           code { font-family: monospace; background: rgba(175,184,193,0.2); padding: 0.2em 0.4em; border-radius: 6px; }
@@ -60,14 +53,12 @@ export class MarkdownController {
           @page { size: A4; margin: 2cm; }
         </style>
       </head>
-      <body>
-        ${htmlContent}
-      </body>
+      <body>${htmlContent}</body>
       </html>
     `;
 
     const browser = await puppeteer.launch({
-      executablePath: '/usr/bin/chromium-browser',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
@@ -75,20 +66,34 @@ export class MarkdownController {
       const page = await browser.newPage();
       await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
       
-      const pdfPath = path.join(tempDir, `${title}.pdf`);
-      await page.pdf({
-        path: pdfPath,
-        format: 'A4',
-        printBackground: true,
-        displayHeaderFooter: false
-      });
+      let outputPath: string;
+      let outputFileName: string;
 
-      const token = generateDownloadToken('anonymous');
+      if (format === 'png') {
+        outputPath = path.join(tempDir, `${title}.png`);
+        await page.screenshot({ path: outputPath, fullPage: true });
+      } else if (format === 'docx') {
+        const htmlPath = path.join(tempDir, 'temp.html');
+        fs.writeFileSync(htmlPath, fullHtml);
+        const profileDir = path.join(os.tmpdir(), `libre_md_${jobId}`);
+        const libreOfficeCmd = `libreoffice --env:UserInstallation=file://${profileDir} --headless --convert-to docx --outdir "${tempDir}" "${htmlPath}"`;
+        
+        await execAsync(libreOfficeCmd);
+        fs.renameSync(path.join(tempDir, 'temp.docx'), path.join(tempDir, `${title}.docx`));
+        outputPath = path.join(tempDir, `${title}.docx`);
+        if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
+      } else { // Default to PDF
+        outputPath = path.join(tempDir, `${title}.pdf`);
+        await page.pdf({ path: outputPath, format: 'A4', printBackground: true, displayHeaderFooter: false });
+      }
+
+      const stats = fs.statSync(outputPath);
       MarkdownController.jobs.set(jobId, {
         status: 'completed',
-        outputPath: pdfPath,
-        outputFileName: `${title}.pdf`,
-        token
+        outputPath,
+        outputFileName: `${title}.${format}`,
+        outputSize: stats.size,
+        token: generateDownloadToken('anonymous')
       });
     } finally {
       await browser.close();
@@ -99,12 +104,10 @@ export class MarkdownController {
     const jobId = req.params.jobId as string;
     const job = MarkdownController.jobs.get(jobId);
     if (!job) return res.status(404).json({ success: false });
-    
     res.json({
-      success: true,
-      jobId,
-      status: job.status,
-      token: job.token, // 确保前端能拿到 Token
+      success: true, jobId, status: job.status, token: job.token,
+      outputFileName: job.outputFileName,
+      outputSize: job.outputSize,
       downloadUrl: job.status === 'completed' ? `/api/convert/md/download/${jobId}?token=${job.token}` : undefined
     });
   }
@@ -113,20 +116,10 @@ export class MarkdownController {
     const jobId = req.params.jobId as string;
     const token = req.query.token as string;
     const job = MarkdownController.jobs.get(jobId);
+    if (!job || job.token !== token) return res.status(403).json({ success: false, message: '无效凭证' });
 
-    console.log(`[MD Download Attempt] Job: ${jobId}, Token: ${token}`);
-
-    if (!job || job.token !== token) {
-      console.error(`[MD Download Failed] Invalid. Expected: ${job?.token}, Got: ${token}`);
-      return res.status(403).json({ success: false, message: '无效凭证' });
-    }
-
-    const rawName = job.outputFileName;
-    const uriEncodedName = encodeURIComponent(rawName);
-    const rfc6266Name = uriEncodedName
-      .replace(/\(/g, '%28').replace(/\)/g, '%29')
-      .replace(/\!/g, '%21').replace(/\'/g, '%27')
-      .replace(/\*/g, '%2A');
+    const uriEncodedName = encodeURIComponent(job.outputFileName);
+    const rfc6266Name = uriEncodedName.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\!/g, '%21').replace(/\'/g, '%27').replace(/\*/g, '%2A');
 
     res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
     res.sendFile(path.resolve(job.outputPath), () => {
