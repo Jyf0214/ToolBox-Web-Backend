@@ -17,6 +17,7 @@ export interface IUser extends Document {
   password: string;
   role: UserRole;
   status: UserStatus;
+  banReason?: string;
   emailVerified: boolean;
   avatar?: string;
   createdAt: Date;
@@ -30,6 +31,7 @@ const UserSchema: Schema = new Schema({
   password: { type: String, required: true },
   role: { type: String, enum: Object.values(UserRole), default: UserRole.USER },
   status: { type: String, enum: Object.values(UserStatus), default: UserStatus.ACTIVE },
+  banReason: { type: String },
   emailVerified: { type: Boolean, default: false },
   avatar: { type: String },
 }, { timestamps: true });

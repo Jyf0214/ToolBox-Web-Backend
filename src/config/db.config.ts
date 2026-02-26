@@ -77,9 +77,10 @@ export class DatabaseManager {
       // 2. 关键：将所有存量用户的 usernameLower 填充为小写格式，防止 UNIQUE 约束冲突
       await prisma.$executeRawUnsafe(`UPDATE User SET usernameLower = LOWER(username) WHERE usernameLower IS NULL OR usernameLower = ''`);
       
-      // 3. 填充缺失的 avatar 字段默认值
+      // 3. 填充缺失的 avatar 和 banReason 字段
       try {
         await prisma.$executeRawUnsafe(`ALTER TABLE User ADD COLUMN IF NOT EXISTS avatar TEXT AFTER emailVerified`);
+        await prisma.$executeRawUnsafe(`ALTER TABLE User ADD COLUMN IF NOT EXISTS banReason TEXT AFTER status`);
       } catch { /* 忽略错误 */ }
 
       console.log('✨ 存量数据预处理完成，准备同步 Schema');

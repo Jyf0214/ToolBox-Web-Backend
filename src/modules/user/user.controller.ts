@@ -9,9 +9,6 @@ import { ConfigController } from '../config/config.controller';
 const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
 export class UserController {
-  /**
-   * 用户注册
-   */
   public register = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { username, password, email } = req.body;
@@ -31,7 +28,6 @@ export class UserController {
       const userCount = dbType === 'mongodb' ? await MongoUser.countDocuments() : await DatabaseManager.getPrisma().user.count();
       if (userCount === 0) isFirstAdmin = true;
 
-        // --- 注册控制逻辑 ---
       if (!isFirstAdmin) {
         const config = await ConfigController.getConfig('access_config');
         const accessConfig = config ? JSON.parse(config) : { 
@@ -43,32 +39,27 @@ export class UserController {
           enforce_qq_numeric_only: true
         };
 
-        // 1. 检查是否允许开放注册
         if (!accessConfig.allow_non_admin_registration) {
           res.status(403).json({ success: false, message: '系统已关闭开放注册' });
           return;
         }
 
-        // 2. 检查保留用户名 (黑名单)
         const reserved = accessConfig.reserved_usernames || [];
         if (reserved.map((n: string) => n.toLowerCase()).includes(usernameLower)) {
           res.status(403).json({ success: false, message: '该用户名已被系统保留' });
           return;
         }
 
-        // 3. 检查邮箱限制
         if (email) {
           const emailParts = email.split('@');
           const account = emailParts[0];
           const domain = emailParts[1]?.toLowerCase();
 
-          // 3.1 检查邮箱别名 (+)
           if (!accessConfig.allow_email_alias && account.includes('+')) {
-            res.status(403).json({ success: false, message: '系统禁止使用邮箱别名 (+) 进行注册' });
+            res.status(403).json({ success: false, message: '禁止使用邮箱别名 (+) 注册' });
             return;
           }
 
-          // 3.2 QQ 邮箱专项校验 (纯数字且 5-11 位)
           if (accessConfig.enforce_qq_numeric_only && domain === 'qq.com') {
             if (!/^\d{5,11}$/.test(account)) {
               res.status(403).json({ success: false, message: 'QQ 邮箱注册仅限 5-11 位纯数字账号' });
@@ -76,20 +67,15 @@ export class UserController {
             }
           }
 
-          // 3.3 检查域名白名单
           const allowedDomains = (accessConfig.allowed_email_domains || []) as string[];
           if (allowedDomains.length > 0) {
             if (!domain || !allowedDomains.map(d => d.toLowerCase()).includes(domain)) {
-              res.status(403).json({ 
-                success: false, 
-                message: `仅限指定后缀邮箱注册: ${allowedDomains.join(', ')}` 
-              });
+              res.status(403).json({ success: false, message: `仅限指定后缀邮箱注册: ${allowedDomains.join(', ')}` });
               return;
             }
           }
         }
 
-        // 4. 检查已验证用户上限
         let verifiedCount = 0;
         if (dbType === 'mongodb') {
           verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
@@ -108,19 +94,13 @@ export class UserController {
       try {
         if (dbType === 'mongodb') {
           await MongoUser.create({
-            username, 
-            usernameLower, 
-            password: hashedPassword, 
-            email,
+            username, usernameLower, password: hashedPassword, email,
             role: isFirstAdmin ? UserRole.ADMIN : UserRole.USER
           });
         } else {
           await DatabaseManager.getPrisma().user.create({
             data: {
-              username,
-              usernameLower,
-              password: hashedPassword, 
-              email,
+              username, usernameLower, password: hashedPassword, email,
               role: isFirstAdmin ? 'ADMIN' : 'USER'
             }
           });
@@ -137,9 +117,6 @@ export class UserController {
     } catch (error) { next(error); }
   };
 
-  /**
-   * 登录校验
-   */
   public login = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { username, password } = req.body;
@@ -156,7 +133,8 @@ export class UserController {
       }
 
       if (user.status === 'BANNED') {
-        res.status(403).json({ success: false, message: '您的账号已被封禁' });
+        const reason = user.banReason ? `，原因: ${user.banReason}` : '';
+        res.status(403).json({ success: false, message: `您的账号已被封禁${reason}` });
         return;
       }
 
@@ -175,15 +153,12 @@ export class UserController {
     } catch (error) { next(error); }
   };
 
-  /**
-   * 获取个人资料
-   */
   public getProfile = async (req: any, res: Response) => {
     res.json({ success: true, data: req.user });
   };
 
   /**
-   * 更新个人资料
+   * 修复头像更新：显式映射到数据库字段
    */
   public updateProfile = async (req: any, res: Response, next: NextFunction) => {
     try {
@@ -204,11 +179,12 @@ export class UserController {
   };
 
   /**
-   * 切换用户状态
+   * 封禁逻辑升级：支持留言理由
    */
   public toggleStatus = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+      const { reason } = req.body;
       const dbType = DatabaseManager.getType();
       let user: any = null;
 
@@ -218,18 +194,28 @@ export class UserController {
       if (!user) return res.status(404).json({ success: false, message: '未找到用户' });
       if (user.role === 'ADMIN') return res.status(403).json({ success: false, message: '无法对管理员进行此操作' });
 
-      const newStatus = user.status === 'BANNED' ? 'ACTIVE' : 'BANNED';
+      const isBanning = user.status !== 'BANNED';
+      const newStatus = isBanning ? 'BANNED' : 'ACTIVE';
 
-      if (dbType === 'mongodb') await MongoUser.findByIdAndUpdate(id, { status: newStatus });
-      else await DatabaseManager.getPrisma().user.update({ where: { id: Number(id) }, data: { status: newStatus as any } });
+      if (dbType === 'mongodb') {
+        await MongoUser.findByIdAndUpdate(id, { 
+          status: newStatus,
+          banReason: isBanning ? reason : null 
+        });
+      } else {
+        await DatabaseManager.getPrisma().user.update({ 
+          where: { id: Number(id) }, 
+          data: { 
+            status: newStatus as any,
+            banReason: isBanning ? reason : null
+          } 
+        });
+      }
 
-      res.json({ success: true, message: `用户已${newStatus === 'BANNED' ? '封禁' : '激活'}` });
+      res.json({ success: true, message: `用户已${isBanning ? '封禁' : '解封'}` });
     } catch (error) { next(error); }
   };
 
-  /**
-   * 删除用户
-   */
   public deleteUser = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
@@ -248,9 +234,6 @@ export class UserController {
     } catch (error) { next(error); }
   };
 
-  /**
-   * 获取用户详细用量统计
-   */
   public getUserUsage = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
@@ -279,7 +262,7 @@ export class UserController {
         users = await MongoUser.find({}, '-password');
       } else if (dbType === 'mysql') {
         users = await DatabaseManager.getPrisma().user.findMany({
-          select: { id: true, username: true, role: true, status: true, createdAt: true, email: true, emailVerified: true, avatar: true }
+          select: { id: true, username: true, role: true, status: true, banReason: true, createdAt: true, email: true, emailVerified: true, avatar: true }
         });
       }
       res.json({ success: true, data: users });
