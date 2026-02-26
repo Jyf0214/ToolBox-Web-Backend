@@ -12,112 +12,109 @@ export interface SmtpConfig {
   secure: boolean;
 }
 
+export interface AccessConfig {
+  allow_non_admin_registration: boolean;
+  allow_guest_access: boolean;
+  free_user_quota: number;
+  guest_user_quota: number;
+  quota_unit: string;
+  guest_feature_whitelist: string[];
+  free_tier_features: string[];
+}
+
 export class ConfigController {
   private static KEY_SMTP = 'smtp_config';
+  private static KEY_ACCESS = 'access_config';
 
-  /**
-   * 获取 SMTP 配置
-   */
+  private static getConfig = async (key: string) => {
+    const dbType = DatabaseManager.getType();
+    let value = null;
+    if (dbType === 'mongodb') {
+      const doc = await MongoConfig.findOne({ key });
+      value = doc?.value;
+    } else if (dbType === 'mysql') {
+      const doc = await DatabaseManager.getPrisma().config.findUnique({ where: { key } });
+      value = doc?.value;
+    }
+    return value ? JSON.parse(value) : null;
+  };
+
+  private static setConfig = async (key: string, value: any) => {
+    const dbType = DatabaseManager.getType();
+    const valueStr = JSON.stringify(value);
+    if (dbType === 'mongodb') {
+      await MongoConfig.findOneAndUpdate({ key }, { value: valueStr }, { upsert: true });
+    } else if (dbType === 'mysql') {
+      await DatabaseManager.getPrisma().config.upsert({
+        where: { key },
+        update: { value: valueStr },
+        create: { key, value: valueStr }
+      });
+    }
+  };
+
   public getSmtpConfig = async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const dbType = DatabaseManager.getType();
-      let configValue = null;
-
-      if (dbType === 'mongodb') {
-        const doc = await MongoConfig.findOne({ key: ConfigController.KEY_SMTP });
-        configValue = doc?.value;
-      } else if (dbType === 'mysql') {
-        const doc = await DatabaseManager.getPrisma().config.findUnique({
-          where: { key: ConfigController.KEY_SMTP }
-        });
-        configValue = doc?.value;
-      }
-
-      if (!configValue) {
-        res.json({ success: true, data: null });
-        return;
-      }
-
-      const config: SmtpConfig = JSON.parse(configValue);
-      // 脱敏处理
-      if (config.pass) config.pass = '********';
-
+      const config = await ConfigController.getConfig(ConfigController.KEY_SMTP);
+      if (config && config.pass) config.pass = '********';
       res.json({ success: true, data: config });
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   };
 
-  /**
-   * 更新 SMTP 配置
-   */
   public updateSmtpConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const config: SmtpConfig = req.body;
-      const dbType = DatabaseManager.getType();
-      const valueStr = JSON.stringify(config);
-
-      if (dbType === 'mongodb') {
-        await MongoConfig.findOneAndUpdate(
-          { key: ConfigController.KEY_SMTP },
-          { value: valueStr },
-          { upsert: true, new: true }
-        );
-      } else if (dbType === 'mysql') {
-        const prisma = DatabaseManager.getPrisma();
-        await prisma.config.upsert({
-          where: { key: ConfigController.KEY_SMTP },
-          update: { value: valueStr },
-          create: { key: ConfigController.KEY_SMTP, value: valueStr }
-        });
-      }
-
+      await ConfigController.setConfig(ConfigController.KEY_SMTP, req.body);
       res.json({ success: true, message: 'SMTP 配置已保存' });
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   };
 
   /**
-   * 测试 SMTP 连接
+   * 获取访问与额度配置
    */
+  public getAccessConfig = async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      let config = await ConfigController.getConfig(ConfigController.KEY_ACCESS);
+      // 默认值
+      if (!config) {
+        config = {
+          allow_non_admin_registration: true,
+          allow_guest_access: true,
+          free_user_quota: 10,
+          guest_user_quota: 3,
+          quota_unit: 'calls/day',
+          guest_feature_whitelist: ['convert'],
+          free_tier_features: ['convert', 'markdown']
+        };
+      }
+      res.json({ success: true, data: config });
+    } catch (error) { next(error); }
+  };
+
+  /**
+   * 更新访问与额度配置
+   */
+  public updateAccessConfig = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await ConfigController.setConfig(ConfigController.KEY_ACCESS, req.body);
+      res.json({ success: true, message: '访问配置已保存' });
+    } catch (error) { next(error); }
+  };
+
   public testSmtp = async (req: Request, res: Response) => {
     try {
       const config: SmtpConfig = req.body;
-      
-      // 如果密码是脱敏的，说明没改密码，尝试从数据库获取原密码
       if (config.pass === '********') {
-        const dbType = DatabaseManager.getType();
-        let dbValue = null;
-        if (dbType === 'mongodb') {
-          const doc = await MongoConfig.findOne({ key: ConfigController.KEY_SMTP });
-          dbValue = doc?.value;
-        } else if (dbType === 'mysql') {
-          const doc = await DatabaseManager.getPrisma().config.findUnique({ where: { key: ConfigController.KEY_SMTP } });
-          dbValue = doc?.value;
-        }
-        if (dbValue) {
-          const oldConfig = JSON.parse(dbValue);
-          config.pass = oldConfig.pass;
-        }
+        const old = await ConfigController.getConfig(ConfigController.KEY_SMTP);
+        if (old) config.pass = old.pass;
       }
-
       const transporter = nodemailer.createTransport({
-        host: config.host,
-        port: config.port,
-        secure: config.secure,
-        auth: {
-          user: config.user,
-          pass: config.pass,
-        },
+        host: config.host, port: config.port, secure: config.secure,
+        auth: { user: config.user, pass: config.pass }
       });
-
-      // 验证连接
       await transporter.verify();
-
-      res.json({ success: true, message: 'SMTP 连接测试成功！' });
+      res.json({ success: true, message: 'SMTP 连接成功' });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: `连接测试失败: ${error.message}` });
+      res.status(500).json({ success: false, message: `测试失败: ${error.message}` });
     }
   };
 }

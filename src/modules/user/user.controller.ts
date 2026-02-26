@@ -31,6 +31,7 @@ export class UserController {
       const hashedPassword = await bcrypt.hash(password, 10);
       let isFirstAdmin = false;
 
+      // 检查是否已有管理员
       if (dbType === 'mongodb') {
         const adminExists = await MongoUser.findOne({ role: UserRole.ADMIN });
         if (!adminExists) isFirstAdmin = true;
@@ -38,6 +39,20 @@ export class UserController {
         const prisma = DatabaseManager.getPrisma();
         const adminExists = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
         if (!adminExists) isFirstAdmin = true;
+      }
+
+      // --- 关键修正：非管理员注册控制 ---
+      if (!isFirstAdmin) {
+        const dbConfig = DatabaseManager.getType() === 'mongodb' 
+          ? await (require('../config/config.model').default).findOne({ key: 'access_config' })
+          : await (DatabaseManager.getPrisma()).config.findUnique({ where: { key: 'access_config' } });
+        
+        const accessConfig = dbConfig ? JSON.parse(dbConfig.value) : { allow_non_admin_registration: true };
+        
+        if (!accessConfig.allow_non_admin_registration) {
+          res.status(403).json({ success: false, message: '系统当前已关闭开放注册，请联系管理员' });
+          return;
+        }
       }
 
       try {

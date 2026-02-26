@@ -9,4 +9,8 @@ router.get('/smtp', verifyToken, isAdmin, configController.getSmtpConfig);
 router.post('/smtp', verifyToken, isAdmin, configController.updateSmtpConfig);
 router.post('/test-smtp', verifyToken, isAdmin, configController.testSmtp);
 
+// 访问控制配置
+router.get('/access', verifyToken, isAdmin, configController.getAccessConfig);
+router.post('/access', verifyToken, isAdmin, configController.updateAccessConfig);
+
 export default router;
