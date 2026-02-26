@@ -6,6 +6,7 @@ const router = Router();
 
 // 元数据架构 (公开或带鉴权均可，此处设为带鉴权)
 router.get('/schema', verifyToken, isAdmin, configController.getSchema);
+router.get('/health', configController.getHealth); // 公开接口，用于首页状态展示
 
 // 批量读写配置
 router.get('/all', verifyToken, isAdmin, configController.getAllConfigs);

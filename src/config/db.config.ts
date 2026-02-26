@@ -6,43 +6,51 @@ import mongoose from 'mongoose';
 
 const execAsync = util.promisify(exec);
 
-/**
- * 数据库适配器配置 (Prisma 6.x 智能适配版)
- */
+export type DbStatus = 'connected' | 'push_failed' | 'disconnected' | 'none';
+
+const maskUrl = (url: string | undefined): string => {
+  if (!url) return 'undefined';
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return url.replace(/:([^:@/]+)@/, ':***@');
+  }
+};
+
 export class DatabaseManager {
   private static prismaInstance: PrismaClient | null = null;
   private static dbType: 'mongodb' | 'mysql' | 'none' = 'none';
+  private static status: DbStatus = 'disconnected';
 
-  /**
-   * 初始化数据库连接 (智能判断)
-   */
   public static async connect() {
     const url = process.env.DATABASE_URL;
-
     if (!url) {
-      console.log('⚠️  未检测到 DATABASE_URL，将运行在无数据库模式');
+      this.status = 'none';
       return;
     }
 
+    const maskedUrl = maskUrl(url);
     if (url.startsWith('mongodb://') || url.startsWith('mongodb+srv://')) {
-      console.log('🔍 检测到 MongoDB 连接字符串，正在初始化 Mongoose...');
+      console.log(`🔍 正在初始化 MongoDB: ${maskedUrl}`);
       await this.connectMongoDB(url);
       this.dbType = 'mongodb';
     } else if (url.startsWith('mysql://')) {
-      console.log('🔍 检测到 MySQL 连接字符串，正在初始化 Prisma 6.x...');
+      console.log(`🔍 正在初始化 MySQL: ${maskedUrl}`);
       await this.connectMySQL();
       this.dbType = 'mysql';
-    } else {
-      console.error('❌ 不支持的数据库协议类型:', url.split(':')[0]);
-      console.log('⚠️  将以降级模式运行 (无数据库)');
     }
   }
 
   private static async connectMongoDB(url: string) {
     try {
+      mongoose.set('debug', true);
       await mongoose.connect(url);
+      this.status = 'connected';
       console.log('✅ MongoDB 连接成功');
     } catch (err) {
+      this.status = 'disconnected';
       console.error('❌ MongoDB 连接失败:', err);
     }
   }
@@ -56,53 +64,36 @@ export class DatabaseManager {
       secureUrl = `${originalUrl}${separator}sslaccept=strict`;
     }
 
-    const tryConnectAndSync = async (targetUrl: string, modeName: string) => {
+    const tryConnectAndSync = async (targetUrl: string) => {
       this.prismaInstance = new PrismaClient({ datasources: { db: { url: targetUrl } } });
       await this.prismaInstance.$connect();
-      console.log(`✅ MySQL 连接成功 (${modeName})`);
+      this.status = 'connected';
       
-      console.log('🔄 正在同步数据库结构...');
       try {
         await execAsync(`npx prisma db push --accept-data-loss --schema ./prisma/schema.prisma`, {
-          env: { ...process.env, DATABASE_URL: targetUrl }
+          env: { ...process.env, DATABASE_URL: targetUrl, PRISMA_HIDE_UPDATE_MESSAGE: 'true' }
         });
-        console.log('✨ 数据库结构同步成功');
-      } catch {
-        console.warn('⚠️  数据库结构同步未完全完成 (可能原因: 缺少 schema 文件、数据库权限不足或网络抖动)');
-        console.log('ℹ️  提示：您可以检查 Docker 镜像中是否包含 ./prisma/schema.prisma 文件');
+      } catch (err: unknown) {
+        this.status = 'push_failed';
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('⚠️  结构同步失败:', maskUrl(msg));
       }
     };
 
     try {
-      if (secureUrl !== originalUrl) console.log('🛡️  正在尝试开启安全传输模式 (SSL)...');
-      await tryConnectAndSync(secureUrl, '安全模式');
-    } catch (err: unknown) {
-      if (secureUrl !== originalUrl) {
-        console.warn('⚠️  安全连接失败，正在自动回退到原始连接模式...');
-        try {
-          if (this.prismaInstance) await this.prismaInstance.$disconnect();
-          await tryConnectAndSync(originalUrl, '回退原始模式');
-        } catch (fallbackErr: unknown) {
-          const errMsg = fallbackErr instanceof Error ? fallbackErr.message : 'Unknown';
-          console.error('❌ MySQL 最终连接失败:', errMsg);
-          this.prismaInstance = null;
-        }
-      } else {
-        const errMsg = err instanceof Error ? err.message : 'Unknown';
-        console.error('❌ MySQL 连接失败:', errMsg);
+      await tryConnectAndSync(secureUrl);
+    } catch {
+      try {
+        if (this.prismaInstance) await this.prismaInstance.$disconnect();
+        await tryConnectAndSync(originalUrl);
+      } catch {
+        this.status = 'disconnected';
         this.prismaInstance = null;
       }
     }
   }
 
-  public static getPrisma() {
-    if (this.dbType !== 'mysql' || !this.prismaInstance) {
-      throw new Error('当前非 MySQL 模式或 Prisma 未初始化');
-    }
-    return this.prismaInstance;
-  }
-
-  public static getType() {
-    return this.dbType;
-  }
+  public static getPrisma() { return this.prismaInstance!; }
+  public static getType() { return this.dbType; }
+  public static getStatus(): DbStatus { return this.status; }
 }

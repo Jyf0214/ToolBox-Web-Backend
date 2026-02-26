@@ -13,8 +13,6 @@ import pLimit from 'p-limit';
 import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
 
 const execAsync = util.promisify(exec);
-
-// 适当降低并发以换取极端稳定性，防止 OOM
 const CONCURRENCY_LIMIT = 10;
 
 interface ConvertJob {
@@ -23,6 +21,7 @@ interface ConvertJob {
   inputPath: string;
   outputPath?: string;
   outputFileName: string;
+  outputSize?: number; // 产物真实大小
   token?: string;
   error?: string;
   createdAt: number;
@@ -39,7 +38,6 @@ interface ConvertJob {
 
 const convertJobs = new Map<string, ConvertJob>();
 
-// 全局定时清理：每 10 分钟清理一次，删除超过 30 分钟的任务和文件
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of convertJobs.entries()) {
@@ -49,7 +47,6 @@ setInterval(() => {
         if (jobDir.includes('job_')) fs.rmSync(jobDir, { recursive: true, force: true });
       }
       convertJobs.delete(id);
-      console.log(`[Cleanup] Deleted expired job: ${id}`);
     }
   }
 }, 10 * 60 * 1000);
@@ -79,7 +76,6 @@ export class ConvertController {
 
     convertJobs.set(jobId, job);
     this.processConversion(jobId, inputPath, isZip, makeEven);
-
     res.status(202).json({ success: true, message: '任务已提交', jobId });
   }
 
@@ -144,10 +140,15 @@ export class ConvertController {
       } else {
         await this.handleSingleFileProcessing(job, inputPath, tempBaseDir, makeEven);
       }
+      
+      // 计算真实大小
+      if (job.outputPath && fs.existsSync(job.outputPath)) {
+        job.outputSize = fs.statSync(job.outputPath).size;
+      }
+
       job.token = generateDownloadToken('anonymous');
       job.status = 'completed';
     } catch (error: any) {
-      console.error(`[Job ${jobId}] Failed:`, error.message);
       job.status = 'failed';
       job.error = error.message;
     } finally {
@@ -173,43 +174,48 @@ export class ConvertController {
       zip.extractAllTo(unzipDir, true);
     } catch { throw new Error('压缩包解析失败'); }
 
-    const allFiles: string[] = [];
+    const convertFiles: string[] = []; // 需要转换的 docx
+    const keepFiles: { fullPath: string; relativePath: string }[] = []; // 需要保留的 pdf
+
     const walk = (dir: string) => {
       fs.readdirSync(dir).forEach(file => {
         const fullPath = path.join(dir, file);
+        const relativePath = path.relative(unzipDir, fullPath);
         if (fs.statSync(fullPath).isDirectory()) walk(fullPath);
-        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) allFiles.push(fullPath);
+        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) convertFiles.push(fullPath);
+        else if (file.toLowerCase().endsWith('.pdf')) keepFiles.push({ fullPath, relativePath });
       });
     };
     walk(unzipDir);
 
-    if (allFiles.length === 0) throw new Error('未找到 DOCX 文件');
+    if (convertFiles.length === 0 && keepFiles.length === 0) throw new Error('压缩包内无可处理的文件');
 
-    job.progress = { total: allFiles.length, current: 0, message: '开始并行转换...' };
+    job.progress = { total: convertFiles.length, current: 0, message: '开始并行处理...' };
     const limit = pLimit(CONCURRENCY_LIMIT);
-    const results: { relativePath: string; pdfPath: string }[] = [];
+    const convertedResults: { relativePath: string; pdfPath: string }[] = [];
 
-    const tasks = allFiles.map((file) => limit(async () => {
+    const tasks = convertFiles.map((file) => limit(async () => {
       const relativePath = path.relative(unzipDir, file);
       const fileOutDir = path.join(outputDir, path.dirname(relativePath));
       const pdfPath = await this.convertWithRetry(file, fileOutDir, makeEven);
-      results.push({ relativePath, pdfPath });
+      convertedResults.push({ relativePath, pdfPath });
       job.progress!.current++;
-      job.progress!.message = `正在处理: ${path.basename(file)} (${job.progress!.current}/${job.progress!.total})`;
+      job.progress!.message = `正在转换: ${path.basename(file)} (${job.progress!.current}/${job.progress!.total})`;
       convertJobs.set(job.id, job);
     }));
 
     await Promise.all(tasks);
 
-    // 关键校验：35 变 3 的终结者
-    if (results.length !== allFiles.length) {
-      throw new Error(`转换完整性校验失败: 预期 ${allFiles.length} 个，实际完成 ${results.length} 个`);
-    }
-
     const outZip = new AdmZip();
-    for (const res of results) {
+    // 1. 添加转换后的 PDF
+    for (const res of convertedResults) {
       const zipEntryPath = path.dirname(res.relativePath);
       outZip.addLocalFile(res.pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
+    }
+    // 2. 添加保留的原有 PDF (维持目录结构)
+    for (const keep of keepFiles) {
+      const zipEntryPath = path.dirname(keep.relativePath);
+      outZip.addLocalFile(keep.fullPath, zipEntryPath === '.' ? '' : zipEntryPath);
     }
 
     const finalZipPath = path.join(tempBaseDir, job.outputFileName);
@@ -224,7 +230,6 @@ export class ConvertController {
         return await this.convertDocxToPdf(docxPath, outDir, makeEven);
       } catch (e: any) {
         lastError = e;
-        console.warn(`[Retry] ${path.basename(docxPath)} attempt ${i+1} failed: ${e.message}`);
         await new Promise(r => setTimeout(r, 1000));
       }
     }
@@ -245,7 +250,7 @@ export class ConvertController {
       if (!fs.existsSync(pdfPath)) {
         const files = fs.readdirSync(outDir);
         const fallback = files.find(f => f.toLowerCase().endsWith('.pdf'));
-        if (!fallback) throw new Error('PDF 未生成');
+        if (!fallback) throw new Error('PDF 生成失败');
         return path.join(outDir, fallback);
       }
 
@@ -266,12 +271,13 @@ export class ConvertController {
   public getStatus(req: Request, res: Response) {
     const jobId = req.params.jobId as string;
     const job = convertJobs.get(jobId);
-    if (!job) return res.status(404).json({ success: false, message: '未找到任务' });
+    if (!job) return res.status(404).json({ success: false, message: '任务不存在' });
     res.json({
       success: true,
       jobId: job.id,
       status: job.status,
       outputFileName: job.outputFileName,
+      outputSize: job.outputSize, // 包含物理大小
       progress: job.progress,
       downloadToken: job.status === 'completed' ? job.token : undefined,
       error: job.error
@@ -283,17 +289,8 @@ export class ConvertController {
     const token = req.query.token as string;
     const job = convertJobs.get(jobId);
 
-    console.log(`[Download Attempt] Job: ${jobId}, Token: ${token}`);
-
-    if (!job) {
-      console.error(`[Download Failed] Task ${jobId} not found in memory`);
-      res.status(404).json({ success: false, message: '未找到转换任务' });
-      return;
-    }
-
-    if (job.status !== 'completed' || !job.token || job.token !== token || !job.outputPath) {
-      console.error(`[Download Failed] Invalid creds or status for ${jobId}`);
-      res.status(403).json({ success: false, message: '无效凭证或文件未就绪' });
+    if (!job || job.status !== 'completed' || !job.token || job.token !== token || !job.outputPath) {
+      res.status(403).json({ success: false, message: '无效凭证' });
       return;
     }
 
@@ -303,8 +300,6 @@ export class ConvertController {
     res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
     res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-
-    // 修复点：不再立即删除！交给定时器清理
     res.sendFile(path.resolve(job.outputPath));
   }
 }

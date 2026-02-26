@@ -89,6 +89,21 @@ export class ConfigController {
     res.json({ success: true, data: SYSTEM_CONFIG_SCHEMA });
   };
 
+  /**
+   * 获取服务器健康状况
+   */
+  public getHealth = async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      data: {
+        dbStatus: DatabaseManager.getStatus(),
+        dbType: DatabaseManager.getType(),
+        nodeVersion: process.version,
+        uptime: process.uptime()
+      }
+    });
+  };
+
   public getAllConfigs = async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const dbType = DatabaseManager.getType();
