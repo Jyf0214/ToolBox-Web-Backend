@@ -61,16 +61,17 @@ export class DatabaseManager {
       console.log(`✅ MySQL 连接成功 (${modeName})`);
       
       // 🚀 核心增加：自动处理数据库结构同步 (db push)
-      console.log('🔄 正在同步数据库结构 (prisma db push)...');
+      console.log('🔄 正在同步数据库结构...');
       try {
-        const { stdout } = await execAsync(`DATABASE_URL="${targetUrl}" npx prisma db push --accept-data-loss`);
-        if (stdout.includes('already in sync')) {
-          console.log('✨ 数据库结构已是最新，无需更新');
-        } else {
-          console.log('✨ 数据库结构同步成功');
-        }
+        // 关键安全修复：1. 显式指定 schema 路径；2. 隐藏环境变量打印，防止泄露密码
+        await execAsync(`npx prisma db push --accept-data-loss --schema ./prisma/schema.prisma`, {
+          env: { ...process.env, DATABASE_URL: targetUrl }
+        });
+        console.log('✨ 数据库结构同步成功');
       } catch (pushErr: any) {
-        console.warn('⚠️  数据库自动同步提醒 (可能缺少权限或环境限制):', pushErr.message);
+        // 关键安全修复：不打印 pushErr.message，因为它可能包含连接字符串
+        console.warn('⚠️  数据库结构同步未完全完成 (可能原因: 缺少 schema 文件、数据库权限不足或网络抖动)');
+        console.log('ℹ️  提示：您可以检查 Docker 镜像中是否包含 ./prisma/schema.prisma 文件');
       }
     };
 
