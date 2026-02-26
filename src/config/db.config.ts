@@ -40,9 +40,13 @@ export class DatabaseManager {
   }
 
   private static async connectMySQL() {
+    const url = process.env.DATABASE_URL;
     try {
-      // Prisma 7 默认加载 DATABASE_URL 环境变量
-      this.prismaInstance = new PrismaClient();
+      // Prisma 7 强制要求在构造函数中提供配置 (如果 schema 中没写 url)
+      this.prismaInstance = new PrismaClient({
+        // @ts-ignore - 兼容某些版本下 Prisma 对 datasourceUrl 的类型推断问题
+        datasourceUrl: url
+      });
       await this.prismaInstance.$connect();
       console.log('✅ MySQL (Prisma 7) 连接成功');
     } catch (err) {
