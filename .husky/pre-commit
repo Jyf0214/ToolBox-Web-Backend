@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "🚀 [Backend] 正在运行提交前检查 (Lint + Build)..."
+npm run lint && npm run build
+echo "✅ [Backend] 检查通过，允许提交"
