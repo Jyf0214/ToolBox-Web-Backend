@@ -9,5 +9,6 @@ const router = Router();
  */
 router.get('/smtp', configController.getSmtpConfig);
 router.post('/smtp', configController.updateSmtpConfig);
+router.post('/test-smtp', configController.testSmtp);
 
 export default router;
