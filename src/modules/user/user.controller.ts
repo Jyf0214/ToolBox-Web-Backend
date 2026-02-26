@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
 export class UserController {
   /**
-   * 用户注册：强制唯一性校验 (不区分大小写)
+   * 用户注册
    */
   public register = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -37,20 +37,39 @@ export class UserController {
         const accessConfig = config ? JSON.parse(config) : { 
           allow_non_admin_registration: true,
           max_verified_users: 100,
-          reserved_usernames: ['admin', 'system', 'root']
+          reserved_usernames: ['admin', 'system', 'root'],
+          allowed_email_domains: []
         };
 
+        // 1. 检查是否允许开放注册
         if (!accessConfig.allow_non_admin_registration) {
           res.status(403).json({ success: false, message: '系统已关闭开放注册' });
           return;
         }
 
+        // 2. 检查保留用户名 (黑名单)
         const reserved = accessConfig.reserved_usernames || [];
         if (reserved.map((n: string) => n.toLowerCase()).includes(usernameLower)) {
           res.status(403).json({ success: false, message: '该用户名已被系统保留' });
           return;
         }
 
+        // 3. 检查邮箱域名白名单
+        if (email) {
+          const allowedDomains = (accessConfig.allowed_email_domains || []) as string[];
+          if (allowedDomains.length > 0) {
+            const domain = email.split('@')[1]?.toLowerCase();
+            if (!domain || !allowedDomains.map(d => d.toLowerCase()).includes(domain)) {
+              res.status(403).json({ 
+                success: false, 
+                message: `仅限指定后缀邮箱注册: ${allowedDomains.join(', ')}` 
+              });
+              return;
+            }
+          }
+        }
+
+        // 4. 检查已验证用户上限
         let verifiedCount = 0;
         if (dbType === 'mongodb') {
           verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
@@ -70,7 +89,7 @@ export class UserController {
         if (dbType === 'mongodb') {
           await MongoUser.create({
             username, 
-            usernameLower, // 存入全小写索引
+            usernameLower, 
             password: hashedPassword, 
             email,
             role: isFirstAdmin ? UserRole.ADMIN : UserRole.USER
@@ -79,7 +98,7 @@ export class UserController {
           await DatabaseManager.getPrisma().user.create({
             data: {
               username,
-              usernameLower, // 存入全小写索引
+              usernameLower,
               password: hashedPassword, 
               email,
               role: isFirstAdmin ? 'ADMIN' : 'USER'
@@ -88,7 +107,7 @@ export class UserController {
         }
       } catch (err: any) {
         if (err.code === 11000 || err.code === 'P2002') {
-          res.status(409).json({ success: false, message: '用户名已被占用 (不区分大小写)' });
+          res.status(409).json({ success: false, message: '用户名已被占用' });
           return;
         }
         throw err;
@@ -99,12 +118,12 @@ export class UserController {
   };
 
   /**
-   * 登录校验：支持不区分大小写的输入匹配
+   * 登录校验
    */
   public login = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { username, password } = req.body;
-      const usernameLower = username.toLowerCase(); // 统一转小写匹配
+      const usernameLower = username.toLowerCase();
       const dbType = DatabaseManager.getType();
       let user: any = null;
 

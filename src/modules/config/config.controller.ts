@@ -22,6 +22,17 @@ const SYSTEM_CONFIG_SCHEMA: ConfigSchemaItem[] = [
   { key: 'allow_guest_access', label: '允许游客使用', type: 'switch', group: '访问控制', defaultValue: true },
   { key: 'max_verified_users', label: '最大注册用户数', type: 'number', group: '访问控制', defaultValue: 100, rules: [{ required: true, message: '必填' }] },
   { 
+    key: 'allowed_email_domains', label: '允许的邮箱域名', type: 'multi-select', group: '访问控制', 
+    defaultValue: ['gmail.com', 'outlook.com', 'qq.com', '163.com', 'icloud.com'],
+    options: [
+      { label: 'gmail.com', value: 'gmail.com' },
+      { label: 'outlook.com', value: 'outlook.com' },
+      { label: 'qq.com', value: 'qq.com' },
+      { label: '163.com', value: '163.com' }
+    ],
+    tooltip: '仅允许这些后缀的邮箱注册，留空则不限制'
+  },
+  { 
     key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
     defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],
     options: [
