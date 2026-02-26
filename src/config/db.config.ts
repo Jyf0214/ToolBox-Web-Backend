@@ -47,11 +47,44 @@ export class DatabaseManager {
     try {
       mongoose.set('debug', true);
       await mongoose.connect(url);
+      
+      // MongoDB 自动迁移逻辑
+      const User = mongoose.model('User');
+      await User.updateMany(
+        { usernameLower: { $exists: false } },
+        [{ $set: { usernameLower: { $toLower: "$username" } } }]
+      );
+
       this.status = 'connected';
-      console.log('✅ MongoDB 连接成功');
+      console.log('✅ MongoDB 连接成功并完成数据自愈');
     } catch (err) {
       this.status = 'disconnected';
       console.error('❌ MongoDB 连接失败:', err);
+    }
+  }
+
+  /**
+   * MySQL 深度迁移自愈：在 db push 之前解决 Schema 冲突
+   */
+  private static async fixLegacyMySQLData(prisma: PrismaClient) {
+    console.log('🔄 正在检查并修复存量数据冲突...');
+    try {
+      // 1. 尝试添加 usernameLower 列 (如果不存在)
+      try {
+        await prisma.$executeRawUnsafe(`ALTER TABLE User ADD COLUMN IF NOT EXISTS usernameLower VARCHAR(255) AFTER username`);
+      } catch { /* 忽略已存在或不支持语法错误 */ }
+
+      // 2. 关键：将所有存量用户的 usernameLower 填充为小写格式，防止 UNIQUE 约束冲突
+      await prisma.$executeRawUnsafe(`UPDATE User SET usernameLower = LOWER(username) WHERE usernameLower IS NULL OR usernameLower = ''`);
+      
+      // 3. 填充缺失的 avatar 字段默认值
+      try {
+        await prisma.$executeRawUnsafe(`ALTER TABLE User ADD COLUMN IF NOT EXISTS avatar TEXT AFTER emailVerified`);
+      } catch { /* 忽略错误 */ }
+
+      console.log('✨ 存量数据预处理完成，准备同步 Schema');
+    } catch (err) {
+      console.warn('⚠️  数据预处理提示:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -65,18 +98,27 @@ export class DatabaseManager {
     }
 
     const tryConnectAndSync = async (targetUrl: string) => {
-      this.prismaInstance = new PrismaClient({ datasources: { db: { url: targetUrl } } });
+      this.prismaInstance = new PrismaClient({ 
+        datasources: { db: { url: targetUrl } },
+        log: ['error', 'warn'] 
+      });
       await this.prismaInstance.$connect();
+
+      // 执行深度自愈
+      await this.fixLegacyMySQLData(this.prismaInstance);
+
       this.status = 'connected';
       
       try {
+        // 带有数据丢失宽容的强制同步
         await execAsync(`npx prisma db push --accept-data-loss --schema ./prisma/schema.prisma`, {
-          env: { ...process.env, DATABASE_URL: targetUrl, PRISMA_HIDE_UPDATE_MESSAGE: 'true' }
+          env: { ...process.env, DATABASE_URL: targetUrl, PRISMA_HIDE_UPDATE_MESSAGE: 'true', PRISMA_NO_HINTS: 'true' }
         });
+        console.log('✅ MySQL 结构同步成功');
       } catch (err: unknown) {
         this.status = 'push_failed';
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn('⚠️  结构同步失败:', maskUrl(msg));
+        console.warn('⚠️  MySQL 结构增量同步受限 (可能存在复杂约束 drift):', maskUrl(msg));
       }
     };
 
