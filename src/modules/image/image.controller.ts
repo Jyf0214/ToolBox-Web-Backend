@@ -1,70 +1,77 @@
-import { Request, Response, NextFunction } from 'express';
-import { DatabaseManager } from '../../config/db.config';
-import MongoImage from './image.model';
+import { Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import AdmZip from 'adm-zip';
+import { generateDownloadToken } from '../../shared/middlewares/token.middleware';
+
+interface ImageJob {
+  id: string;
+  status: 'processing' | 'completed' | 'failed';
+  outputPath?: string;
+  token?: string;
+  createdAt: number;
+}
 
 export class ImageController {
-  public getImages = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { category } = req.query;
-      const dbType = DatabaseManager.getType();
-      let images = [];
+  private static jobs = new Map<string, ImageJob>();
 
-      const filter: any = {};
-      if (category) filter.category = category;
-
-      if (dbType === 'mongodb') {
-        images = await MongoImage.find(filter).sort({ createdAt: -1 });
-      } else if (dbType === 'mysql') {
-        images = await DatabaseManager.getPrisma().image.findMany({
-          where: category ? { category: String(category) } : {},
-          orderBy: { createdAt: 'desc' },
-          include: { user: { select: { username: true } } }
-        });
-      }
-
-      res.json({ success: true, data: images });
-    } catch (error) {
-      next(error);
+  /**
+   * 接收已裁剪的批量文件并打包
+   */
+  public async batchUpload(req: Request, res: Response) {
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      return res.status(400).json({ success: false, message: '未接收到处理后的文件' });
     }
-  };
 
-  public createImage = async (req: any, res: Response, next: NextFunction) => {
+    const jobId = uuidv4();
+    const tempDir = path.join(os.tmpdir(), `img_job_${jobId}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+
     try {
-      const { title, url, category } = req.body;
-      const dbType = DatabaseManager.getType();
-      const userId = req.user.id || req.user._id;
+      const zip = new AdmZip();
+      files.forEach(file => {
+        // file.originalname 包含了用户原始文件名
+        zip.addLocalFile(file.path, '', `cropped_${file.originalname}`);
+      });
 
-      let newImage;
-      if (dbType === 'mongodb') {
-        newImage = await MongoImage.create({ title, url, category, userId });
-      } else if (dbType === 'mysql') {
-        newImage = await DatabaseManager.getPrisma().image.create({
-          data: { title, url, category, userId: Number(userId) }
-        });
-      }
+      const zipPath = path.join(tempDir, 'processed_images.zip');
+      zip.writeZip(zipPath);
 
-      res.status(201).json({ success: true, data: newImage });
-    } catch (error) {
-      next(error);
+      const token = generateDownloadToken('anonymous');
+      ImageController.jobs.set(jobId, {
+        id: jobId,
+        status: 'completed',
+        outputPath: zipPath,
+        token,
+        createdAt: Date.now()
+      });
+
+      res.json({ success: true, jobId, token });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    } finally {
+      // 清理临时单个上传文件
+      files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
     }
-  };
+  }
 
-  public deleteImage = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { id } = req.params;
-      const dbType = DatabaseManager.getType();
+  public download(req: Request, res: Response) {
+    const jobId = req.params.jobId as string;
+    const token = req.query.token as string;
+    const job = ImageController.jobs.get(jobId);
 
-      if (dbType === 'mongodb') {
-        await MongoImage.findByIdAndDelete(id);
-      } else if (dbType === 'mysql') {
-        await DatabaseManager.getPrisma().image.delete({ where: { id: Number(id) } });
-      }
-
-      res.json({ success: true, message: '图片已删除' });
-    } catch (error) {
-      next(error);
+    if (!job || job.token !== token || !job.outputPath) {
+      return res.status(403).json({ success: false, message: '无效凭证' });
     }
-  };
+
+    res.download(job.outputPath, 'cropped_images.zip', () => {
+      fs.rmSync(path.dirname(job.outputPath!), { recursive: true, force: true });
+      ImageController.jobs.delete(jobId);
+    });
+  }
 }
 
 export const imageController = new ImageController();

@@ -1,12 +1,13 @@
+import os from 'os';
 import { Router } from 'express';
+import multer from 'multer';
 import { imageController } from './image.controller';
-import { verifyToken } from '../../shared/middlewares/auth.middleware';
-import { audit } from '../../shared/middlewares/audit.middleware';
 
 const router = Router();
+const upload = multer({ dest: os.tmpdir() });
 
-router.get('/', verifyToken, (req, res, next) => imageController.getImages(req, res, next));
-router.post('/', verifyToken, audit('UPLOAD_IMAGE', 'IMAGE'), (req, res, next) => imageController.createImage(req, res, next));
-router.delete('/:id', verifyToken, audit('DELETE_IMAGE', 'IMAGE'), (req, res, next) => imageController.deleteImage(req, res, next));
+// 接收前端处理好的多个 Blob/File
+router.post('/batch-upload', upload.array('files'), (req, res) => imageController.batchUpload(req, res));
+router.get('/download/:jobId', (req, res) => imageController.download(req, res));
 
 export default router;
