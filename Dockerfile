@@ -46,7 +46,8 @@ COPY --from=builder /app/prisma ./prisma
 EXPOSE 7860
 
 # 强制 Node.js 不缓存日志输出 (实时刷新)
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PRISMA_HIDE_UPDATE_MESSAGE=true
 
 # 启动命令：直接使用 node 启动，避免 npm 拦截日志
 CMD ["node", "dist/server.js"]
