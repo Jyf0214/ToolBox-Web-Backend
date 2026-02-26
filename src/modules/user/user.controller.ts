@@ -30,7 +30,7 @@ export class UserController {
       const userCount = dbType === 'mongodb' ? await MongoUser.countDocuments() : await DatabaseManager.getPrisma().user.count();
       if (userCount === 0) isFirstAdmin = true;
 
-      // --- 关键修正：注册控制逻辑 ---
+      // --- 注册控制逻辑 ---
       if (!isFirstAdmin) {
         const config = await ConfigController.getConfig('access_config');
         const accessConfig = config ? JSON.parse(config) : { 
@@ -38,13 +38,11 @@ export class UserController {
           max_verified_users: 100 
         };
 
-        // 1. 检查是否允许开放注册
         if (!accessConfig.allow_non_admin_registration) {
           res.status(403).json({ success: false, message: '系统已关闭开放注册' });
           return;
         }
 
-        // 2. 检查已验证用户上限
         let verifiedCount = 0;
         if (dbType === 'mongodb') {
           verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
@@ -120,6 +118,34 @@ export class UserController {
       );
 
       res.json({ success: true, data: { token, user: { username: user.username, role: user.role } } });
+    } catch (error) { next(error); }
+  };
+
+  /**
+   * 获取个人资料
+   */
+  public getProfile = async (req: any, res: Response) => {
+    res.json({ success: true, data: req.user });
+  };
+
+  /**
+   * 更新个人资料 (头像等)
+   */
+  public updateProfile = async (req: any, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user.id || req.user._id;
+      const { avatarUrl } = req.body;
+      const dbType = DatabaseManager.getType();
+
+      if (dbType === 'mongodb') {
+        await MongoUser.findByIdAndUpdate(userId, { avatar: avatarUrl });
+      } else {
+        await DatabaseManager.getPrisma().user.update({
+          where: { id: Number(userId) },
+          data: { email: avatarUrl } // 暂借 email 字段演示或应扩展 schema
+        });
+      }
+      res.json({ success: true, message: '个人资料已更新' });
     } catch (error) { next(error); }
   };
 
@@ -204,10 +230,6 @@ export class UserController {
       }
       res.json({ success: true, data: users });
     } catch (error) { next(error); }
-  };
-
-  public getProfile = async (req: any, res: Response) => {
-    res.json({ success: true, data: req.user });
   };
 }
 

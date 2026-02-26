@@ -9,8 +9,9 @@ const router = Router();
 router.post('/register', (req, res, next) => userController.register(req, res, next));
 router.post('/login', (req, res, next) => userController.login(req, res, next));
 
-// 个人资料
+// 个人资料 (用户自管理)
 router.get('/profile', verifyToken, (req, res) => userController.getProfile(req, res));
+router.patch('/profile', verifyToken, audit('UPDATE_PROFILE', 'USER'), (req, res, next) => userController.updateProfile(req, res, next));
 
 // 管理员专用接口
 router.get('/', verifyToken, isAdmin, (req, res, next) => userController.getUsers(req, res, next));
