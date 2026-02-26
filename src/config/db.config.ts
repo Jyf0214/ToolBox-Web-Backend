@@ -43,18 +43,26 @@ export class DatabaseManager {
   }
 
   private static async connectMySQL() {
+    let url = process.env.DATABASE_URL || '';
+    
+    // 🛡️ 自动要求加密：如果用户提供的是不安全的 MySQL 连接，自动补全 SSL 参数
+    if (url.startsWith('mysql://') && !url.includes('sslaccept') && !url.includes('sslmode')) {
+      const separator = url.includes('?') ? '&' : '?';
+      url = `${url}${separator}sslaccept=strict`;
+      console.log('🛡️  检测到不安全的连接，已自动开启 MySQL 安全传输模式 (SSL)');
+    }
+
     try {
-      this.prismaInstance = new PrismaClient();
+      // 覆盖环境变量，确保 Prisma 使用加密后的 URL
+      this.prismaInstance = new PrismaClient({
+        datasources: {
+          db: { url }
+        }
+      });
       await this.prismaInstance.$connect();
       console.log('✅ MySQL (Prisma 6.x) 连接成功');
     } catch (err: any) {
       console.error('❌ MySQL 连接失败:', err.message || err);
-      
-      // 针对 TiDB Cloud / AWS RDS 等强制 SSL 的数据库提供建议
-      if (err.message?.includes('insecure transport') || err.message?.includes('SSL')) {
-        console.warn('💡 提示: 您的数据库强制要求安全连接。请尝试在 DATABASE_URL 末尾添加 ?sslaccept=strict 或 ?sslmode=no-verify');
-      }
-      
       this.prismaInstance = null;
     }
   }
