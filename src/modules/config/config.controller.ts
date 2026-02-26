@@ -21,6 +21,17 @@ const SYSTEM_CONFIG_SCHEMA: ConfigSchemaItem[] = [
   { key: 'allow_non_admin_registration', label: '开放用户注册', type: 'switch', group: '访问控制', defaultValue: true },
   { key: 'allow_guest_access', label: '允许游客使用', type: 'switch', group: '访问控制', defaultValue: true },
   { key: 'max_verified_users', label: '最大注册用户数', type: 'number', group: '访问控制', defaultValue: 100, rules: [{ required: true, message: '必填' }] },
+  { 
+    key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
+    defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],
+    options: [
+      { label: 'admin', value: 'admin' },
+      { label: 'system', value: 'system' },
+      { label: 'official', value: 'official' },
+      { label: 'support', value: 'support' }
+    ],
+    tooltip: '这些用户名仅限首位管理员使用，普通用户注册时将被拦截'
+  },
   { key: 'free_user_quota', label: '免费用户额度', type: 'number', group: '额度与单位', defaultValue: 10 },
   { key: 'guest_user_quota', label: '游客用户额度', type: 'number', group: '额度与单位', defaultValue: 3 },
   { 

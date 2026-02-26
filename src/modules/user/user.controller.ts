@@ -35,14 +35,24 @@ export class UserController {
         const config = await ConfigController.getConfig('access_config');
         const accessConfig = config ? JSON.parse(config) : { 
           allow_non_admin_registration: true,
-          max_verified_users: 100 
+          max_verified_users: 100,
+          reserved_usernames: ['admin', 'system', 'root']
         };
 
+        // 1. 检查是否允许开放注册
         if (!accessConfig.allow_non_admin_registration) {
           res.status(403).json({ success: false, message: '系统已关闭开放注册' });
           return;
         }
 
+        // 2. 检查保留用户名 (黑名单)
+        const reserved = accessConfig.reserved_usernames || [];
+        if (reserved.map((n: string) => n.toLowerCase()).includes(username.toLowerCase())) {
+          res.status(403).json({ success: false, message: '该用户名已被系统保留，请更换其他名称' });
+          return;
+        }
+
+        // 3. 检查已验证用户上限
         let verifiedCount = 0;
         if (dbType === 'mongodb') {
           verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
@@ -117,7 +127,7 @@ export class UserController {
         JWT_SECRET, { expiresIn: '7d' }
       );
 
-      res.json({ success: true, data: { token, user: { username: user.username, role: user.role } } });
+      res.json({ success: true, data: { token, user: { username: user.username, role: user.role, avatar: user.avatar } } });
     } catch (error) { next(error); }
   };
 
@@ -225,7 +235,7 @@ export class UserController {
         users = await MongoUser.find({}, '-password');
       } else if (dbType === 'mysql') {
         users = await DatabaseManager.getPrisma().user.findMany({
-          select: { id: true, username: true, role: true, status: true, createdAt: true, email: true, emailVerified: true }
+          select: { id: true, username: true, role: true, status: true, createdAt: true, email: true, emailVerified: true, avatar: true }
         });
       }
       res.json({ success: true, data: users });
