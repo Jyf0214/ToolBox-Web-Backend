@@ -20,13 +20,14 @@ export interface AccessConfig {
   quota_unit: string;
   guest_feature_whitelist: string[];
   free_tier_features: string[];
+  max_verified_users: number; // 最大已验证用户数
 }
 
 export class ConfigController {
   private static KEY_SMTP = 'smtp_config';
   private static KEY_ACCESS = 'access_config';
 
-  private static getConfig = async (key: string) => {
+  public static getConfig = async (key: string) => {
     const dbType = DatabaseManager.getType();
     let value = null;
     if (dbType === 'mongodb') {
@@ -83,7 +84,8 @@ export class ConfigController {
           guest_user_quota: 3,
           quota_unit: 'calls/day',
           guest_feature_whitelist: ['convert'],
-          free_tier_features: ['convert', 'markdown']
+          free_tier_features: ['convert', 'markdown'],
+          max_verified_users: 100
         };
       }
       res.json({ success: true, data: config });

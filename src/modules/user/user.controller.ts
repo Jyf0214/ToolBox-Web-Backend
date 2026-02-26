@@ -4,12 +4,13 @@ import jwt from 'jsonwebtoken';
 import { DatabaseManager } from '../../config/db.config';
 import MongoUser, { UserRole, UserStatus } from './user.model';
 import MongoLog from '../log/log.model';
+import { ConfigController } from '../config/config.controller';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
 export class UserController {
   /**
-   * 用户注册：第一个账户必定为管理员
+   * 用户注册
    */
   public register = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -20,14 +21,41 @@ export class UserController {
       }
 
       const dbType = DatabaseManager.getType();
-      let isFirstAdmin = false;
+      if (dbType === 'none') {
+        res.status(503).json({ success: false, message: '系统未配置数据库' });
+        return;
+      }
 
-      if (dbType === 'mongodb') {
-        const count = await MongoUser.countDocuments();
-        if (count === 0) isFirstAdmin = true;
-      } else {
-        const count = await DatabaseManager.getPrisma().user.count();
-        if (count === 0) isFirstAdmin = true;
+      let isFirstAdmin = false;
+      const userCount = dbType === 'mongodb' ? await MongoUser.countDocuments() : await DatabaseManager.getPrisma().user.count();
+      if (userCount === 0) isFirstAdmin = true;
+
+      // --- 关键修正：注册控制逻辑 ---
+      if (!isFirstAdmin) {
+        const config = await ConfigController.getConfig('access_config');
+        const accessConfig = config ? JSON.parse(config) : { 
+          allow_non_admin_registration: true,
+          max_verified_users: 100 
+        };
+
+        // 1. 检查是否允许开放注册
+        if (!accessConfig.allow_non_admin_registration) {
+          res.status(403).json({ success: false, message: '系统已关闭开放注册' });
+          return;
+        }
+
+        // 2. 检查已验证用户上限
+        let verifiedCount = 0;
+        if (dbType === 'mongodb') {
+          verifiedCount = await MongoUser.countDocuments({ emailVerified: true });
+        } else {
+          verifiedCount = await DatabaseManager.getPrisma().user.count({ where: { emailVerified: true } });
+        }
+
+        if (verifiedCount >= accessConfig.max_verified_users) {
+          res.status(429).json({ success: false, message: '已达到验证用户注册上限，请联系管理员' });
+          return;
+        }
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -59,7 +87,7 @@ export class UserController {
   };
 
   /**
-   * 登录校验：增加状态检查
+   * 登录校验
    */
   public login = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -120,7 +148,7 @@ export class UserController {
   };
 
   /**
-   * 删除用户：禁止删除管理员
+   * 删除用户
    */
   public deleteUser = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -157,7 +185,6 @@ export class UserController {
         const prisma = DatabaseManager.getPrisma();
         stats.uploadCount = await prisma.auditLog.count({ where: { userId: Number(id), action: 'UPLOAD_IMAGE' } });
         stats.convertCount = await prisma.auditLog.count({ where: { userId: Number(id), module: 'CONVERT' } });
-        // 注意：目前登录没挂 audit，可以统计 LOGIN action (需在 login 方法添加记录)
       }
 
       res.json({ success: true, data: stats });
@@ -172,7 +199,7 @@ export class UserController {
         users = await MongoUser.find({}, '-password');
       } else if (dbType === 'mysql') {
         users = await DatabaseManager.getPrisma().user.findMany({
-          select: { id: true, username: true, role: true, status: true, createdAt: true, email: true }
+          select: { id: true, username: true, role: true, status: true, createdAt: true, email: true, emailVerified: true }
         });
       }
       res.json({ success: true, data: users });
