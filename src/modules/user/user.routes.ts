@@ -14,7 +14,8 @@ router.get('/profile', verifyToken, (req, res) => userController.getProfile(req,
 
 // 管理员专用接口
 router.get('/', verifyToken, isAdmin, (req, res, next) => userController.getUsers(req, res, next));
-router.patch('/:id/role', verifyToken, isAdmin, audit('UPDATE_ROLE', 'USER'), (req, res, next) => userController.updateRole(req, res, next));
+router.get('/:id/usage', verifyToken, isAdmin, (req, res, next) => userController.getUserUsage(req, res, next));
+router.patch('/:id/status', verifyToken, isAdmin, audit('TOGGLE_USER_STATUS', 'USER'), (req, res, next) => userController.toggleStatus(req, res, next));
 router.delete('/:id', verifyToken, isAdmin, audit('DELETE_USER', 'USER'), (req, res, next) => userController.deleteUser(req, res, next));
 
 export default router;
