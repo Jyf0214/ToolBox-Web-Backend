@@ -39,7 +39,8 @@ export class UserController {
           max_verified_users: 100,
           reserved_usernames: ['admin', 'system', 'root'],
           allowed_email_domains: [],
-          allow_email_alias: false
+          allow_email_alias: false,
+          enforce_qq_numeric_only: true
         };
 
         // 1. 检查是否允许开放注册
@@ -67,7 +68,15 @@ export class UserController {
             return;
           }
 
-          // 3.2 检查域名白名单
+          // 3.2 QQ 邮箱专项校验 (纯数字且 5-11 位)
+          if (accessConfig.enforce_qq_numeric_only && domain === 'qq.com') {
+            if (!/^\d{5,11}$/.test(account)) {
+              res.status(403).json({ success: false, message: 'QQ 邮箱注册仅限 5-11 位纯数字账号' });
+              return;
+            }
+          }
+
+          // 3.3 检查域名白名单
           const allowedDomains = (accessConfig.allowed_email_domains || []) as string[];
           if (allowedDomains.length > 0) {
             if (!domain || !allowedDomains.map(d => d.toLowerCase()).includes(domain)) {

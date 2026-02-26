@@ -30,12 +30,12 @@ const SYSTEM_CONFIG_SCHEMA: ConfigSchemaItem[] = [
         { label: '163.com', value: '163.com' }
       ],
       tooltip: '仅允许这些后缀的邮箱注册，留空则不限制'
-    },
-    { key: 'allow_email_alias', label: '允许邮箱别名 (+)', type: 'switch', group: '访问控制', defaultValue: false, tooltip: '关闭后将禁止如 user+extra@domain.com 形式的邮箱注册' },
-    { 
-      key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
-      defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],
-    options: [
+      },
+      { key: 'allow_email_alias', label: '允许邮箱别名 (+)', type: 'switch', group: '访问控制', defaultValue: false, tooltip: '关闭后将禁止如 user+extra@domain.com 形式的邮箱注册' },
+      { key: 'enforce_qq_numeric_only', label: 'QQ 邮箱强制纯数字', type: 'switch', group: '访问控制', defaultValue: true, tooltip: '开启后 QQ 邮箱仅限 5-11 位纯数字账号注册' },
+      { 
+        key: 'reserved_usernames', label: '保留用户名', type: 'multi-select', group: '访问控制', 
+        defaultValue: ['admin', 'administrator', 'system', 'official', 'root', 'support', 'toolbox'],    options: [
       { label: 'admin', value: 'admin' },
       { label: 'system', value: 'system' },
       { label: 'official', value: 'official' },
