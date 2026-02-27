@@ -24,7 +24,7 @@ export const getClientIp = (req: any): string => {
   }
 
   // 4. 回退到直接连接
-  return req.ip || req.connection.remoteAddress || 'unknown';
+  return req.ip || req.connection?.remoteAddress || 'unknown';
 };
 
 /**
@@ -33,30 +33,40 @@ export const getClientIp = (req: any): string => {
 export const recordAuditLog = async (req: any, action: string, module: string, details?: string) => {
   try {
     const dbType = DatabaseManager.getType();
-    const logData = {
+    const rawUserId = req.user?.id || req.user?._id;
+    
+    // 构造基础日志对象
+    const logData: any = {
       action,
       module,
-      ip: getClientIp(req), // 使用精准提取逻辑
-      userId: req.user?.id || req.user?._id,
-      details: details || JSON.stringify(req.body),
+      ip: getClientIp(req),
+      details: details || (req.body ? JSON.stringify(req.body) : undefined),
     };
 
     if (dbType === 'mongodb') {
+      // MongoDB 处理：确保 userId 是有效的 ObjectId 格式字符串或 undefined
+      if (rawUserId && typeof rawUserId === 'string' && rawUserId.length === 24) {
+        logData.userId = rawUserId;
+      }
       await MongoLog.create(logData);
     } else if (dbType === 'mysql') {
+      // MySQL 处理：确保 userId 是有效的数字
       const prisma = DatabaseManager.getPrisma();
+      const userIdNum = rawUserId ? Number(rawUserId) : null;
+      
       await prisma.auditLog.create({
         data: {
           action: logData.action,
           module: logData.module,
           ip: logData.ip,
-          userId: logData.userId ? Number(logData.userId) : null,
+          userId: (userIdNum && !isNaN(userIdNum)) ? userIdNum : null,
           details: logData.details,
         }
       });
     }
   } catch (err) {
-    console.error('Audit Log Error:', err);
+    // 即使审计记录失败也不要阻塞主业务，但打印错误
+    console.error('[Audit Log Error]:', err);
   }
 };
 
@@ -65,8 +75,10 @@ export const recordAuditLog = async (req: any, action: string, module: string, d
  */
 export const audit = (action: string, module: string) => {
   return (req: any, _res: Response, next: NextFunction) => {
-    // 记录行为
-    recordAuditLog(req, action, module);
+    // 异步记录日志，不阻塞响应
+    recordAuditLog(req, action, module).catch(err => {
+      console.error('[Audit Middleware Error]:', err);
+    });
     next();
   };
 };
