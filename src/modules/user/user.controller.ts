@@ -5,6 +5,7 @@ import { DatabaseManager } from '../../config/db.config';
 import MongoUser, { UserRole, UserStatus } from './user.model';
 import MongoLog from '../log/log.model';
 import { ConfigController } from '../config/config.controller';
+import { recordAuditLog } from '../../shared/middlewares/audit.middleware';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'toolbox-secret-2026';
 
@@ -149,6 +150,10 @@ export class UserController {
         JWT_SECRET, { expiresIn: '7d' }
       );
 
+      // 📝 手动触发登录审计 (因为此时中间件还拿不到 req.user)
+      const auditReq = { ...req, user: { id: user.id || user._id, username: user.username, role: user.role } };
+      await recordAuditLog(auditReq, 'LOGIN', 'AUTH');
+
       res.json({ success: true, data: { token, user: { username: user.username, role: user.role, avatar: user.avatar } } });
     } catch (error) { next(error); }
   };
@@ -238,16 +243,27 @@ export class UserController {
     try {
       const { id } = req.params;
       const dbType = DatabaseManager.getType();
-      let stats = { uploadCount: 0, convertCount: 0, loginCount: 0 };
+      const userIdNum = Number(id);
+      
+      // 定义统计结果
+      const stats = { 
+        convertCount: 0, // 文档处理类 (DOCX, Markdown)
+        imageCount: 0,   // 图像处理类 (裁剪, 批量)
+        loginCount: 0    // 安全相关 (登录)
+      };
 
       if (dbType === 'mongodb') {
-        stats.uploadCount = await MongoLog.countDocuments({ userId: id, action: 'UPLOAD_IMAGE' });
         stats.convertCount = await MongoLog.countDocuments({ userId: id, module: 'CONVERT' });
+        stats.imageCount = await MongoLog.countDocuments({ userId: id, module: 'IMAGE' });
         stats.loginCount = await MongoLog.countDocuments({ userId: id, action: 'LOGIN' });
       } else {
         const prisma = DatabaseManager.getPrisma();
-        stats.uploadCount = await prisma.auditLog.count({ where: { userId: Number(id), action: 'UPLOAD_IMAGE' } });
-        stats.convertCount = await prisma.auditLog.count({ where: { userId: Number(id), module: 'CONVERT' } });
+        // 统计转换模块总数
+        stats.convertCount = await prisma.auditLog.count({ where: { userId: userIdNum, module: 'CONVERT' } });
+        // 统计图像模块总数
+        stats.imageCount = await prisma.auditLog.count({ where: { userId: userIdNum, module: 'IMAGE' } });
+        // 统计登录总数
+        stats.loginCount = await prisma.auditLog.count({ where: { userId: userIdNum, action: 'LOGIN' } });
       }
 
       res.json({ success: true, data: stats });
