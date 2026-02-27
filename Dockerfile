@@ -47,6 +47,7 @@ EXPOSE 7860
 
 # 强制 Node.js 不缓存日志输出 (实时刷新)
 ENV NODE_ENV=production \
+    FORCE_COLOR=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=true \
     PRISMA_NO_HINTS=true
 

@@ -19,6 +19,9 @@ export class AppError extends Error {
  * 全局错误处理中间件
  */
 export function errorHandler(err: Error | AppError, req: Request, res: Response, _next: NextFunction): void {
+  // 📝 无论什么错误，都在控制台记录一份，方便 Docker 查看
+  console.error(`[Error] ${req.method} ${req.originalUrl}:`, err);
+
   if (res.headersSent) {
     return _next(err);
   }
@@ -33,7 +36,6 @@ export function errorHandler(err: Error | AppError, req: Request, res: Response,
   }
 
   // 未知错误
-  console.error('未处理的错误:', err);
   res.status(500).json({
     success: false,
     message: process.env.NODE_ENV === 'production' ? '服务器内部错误' : err.message,

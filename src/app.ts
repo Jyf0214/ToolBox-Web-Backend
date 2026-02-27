@@ -32,6 +32,16 @@ app.use(cors({
 app.use(json({ limit: '10mb' }));
 app.use(urlencoded({ extended: true, limit: '10mb' }));
 
+// 📝 全局请求日志 (解决 Docker 无日志问题)
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms`);
+  });
+  next();
+});
+
 // 全局限流
 app.use(rateLimit(100, 60000));
 

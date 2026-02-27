@@ -18,6 +18,9 @@ export const verifyInternalKey = (req: Request, res: Response, next: NextFunctio
   if (clientKey === serverKey) {
     next();
   } else {
+    // 🔐 增加安全日志，方便 Docker 排查
+    console.warn(`[Security] 拦截到非法 API 访问: Path=${req.originalUrl}, Key=${clientKey ? 'Present(Mismatch)' : 'Missing'}`);
+    
     // 密钥不匹配或缺失，拒绝访问
     res.status(403).json({
       success: false,
