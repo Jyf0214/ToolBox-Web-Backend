@@ -32,6 +32,7 @@
   },
   "homepage": "https://github.com/Jyf0214/ToolBox-Web-Backend#readme",
   "dependencies": {
+    "@clerk/clerk-sdk-node": "^4.13.23",
     "@prisma/client": "^6.4.1",
     "@prisma/config": "^7.4.1",
     "adm-zip": "^0.5.16",

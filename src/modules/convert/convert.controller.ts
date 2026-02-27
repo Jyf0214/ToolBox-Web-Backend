@@ -255,11 +255,19 @@ export class ConvertController {
       }
 
       if (makeEven) {
-        const pdfBytes = fs.readFileSync(pdfPath);
-        const pdfDoc = await PDFDocument.load(pdfBytes);
-        if (pdfDoc.getPageCount() % 2 !== 0) {
-          pdfDoc.addPage();
-          fs.writeFileSync(pdfPath, Buffer.from(await pdfDoc.save()));
+        try {
+          const pdfBytes = fs.readFileSync(pdfPath);
+          const pdfDoc = await PDFDocument.load(pdfBytes);
+          const pageCount = pdfDoc.getPageCount();
+          
+          if (pageCount % 2 !== 0) {
+            console.log(`[PDF] Adding blank page to ${originalName}.pdf (Current: ${pageCount})`);
+            pdfDoc.addPage();
+            const modifiedPdfBytes = await pdfDoc.save();
+            fs.writeFileSync(pdfPath, Buffer.from(modifiedPdfBytes));
+          }
+        } catch (err: any) {
+          console.error(`[MakeEven Error] Failed to process ${pdfPath}:`, err.message);
         }
       }
       return pdfPath;

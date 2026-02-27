@@ -81,7 +81,8 @@ export class ConfigController {
     try {
       return value ? JSON.parse(value) : null;
     } catch {
-      return value;
+      console.warn(`[Config] Failed to parse config for key: ${key}, value: ${value}`);
+      return null;
     }
   };
 
