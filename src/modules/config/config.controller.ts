@@ -69,44 +69,24 @@ export class ConfigController {
     res.json({ success: true, data: { dbStatus: DatabaseManager.getStatus(), dbType: DatabaseManager.getType() } });
   };
 
-  /**
-   * 强化版获取所有配置：确保返回所有 Schema 键名
-   */
   public getAllConfigs = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dbType = DatabaseManager.getType();
       let dbConfigs: any[] = [];
-      
-      if (dbType === 'mongodb') {
-        dbConfigs = await MongoConfig.find({});
-      } else if (dbType === 'mysql') {
+      if (dbType === 'mongodb') dbConfigs = await MongoConfig.find({});
+      else if (dbType === 'mysql') {
         const prisma = DatabaseManager.getPrisma();
         if (prisma) dbConfigs = await prisma.config.findMany();
       }
 
       const values: Record<string, any> = {};
-      
-      // 1. 初始化所有键名为 Schema 中的默认值
-      SYSTEM_CONFIG_SCHEMA.forEach(item => {
-        values[item.key] = item.defaultValue;
-      });
-
-      // 2. 使用数据库值覆盖 (并处理 JSON 解析)
+      SYSTEM_CONFIG_SCHEMA.forEach(item => { values[item.key] = item.defaultValue; });
       dbConfigs.forEach(c => {
-        try {
-          values[c.key] = JSON.parse(c.value);
-        } catch {
-          values[c.key] = c.value;
-        }
+        try { values[c.key] = JSON.parse(c.value); } catch { values[c.key] = c.value; }
       });
-
-      // 🔐 记录下发日志 (脱敏版)
       console.log(`[Config] 成功下发配置列表，键数: ${Object.keys(values).length}`);
-
       res.json({ success: true, data: values });
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   };
 
   public updateConfigs = async (req: Request, res: Response, next: NextFunction) => {
@@ -132,14 +112,25 @@ export class ConfigController {
     try {
       const values = req.body;
       let pass = values.smtp_pass;
-      if (pass === '********') pass = await ConfigController.getConfig('smtp_pass');
+      if (pass === '********') {
+        const dbPass = await ConfigController.getConfig('smtp_pass');
+        pass = dbPass;
+      }
+
+      console.log(`[SMTP Test] 正在尝试连接: ${values.smtp_host}:${values.smtp_port}, User: ${values.smtp_user}`);
+
       const transporter = nodemailer.createTransport({
-        host: values.smtp_host, port: values.smtp_port, secure: values.smtp_secure,
-        auth: { user: values.smtp_user, pass: pass }
+        host: values.smtp_host,
+        port: Number(values.smtp_port),
+        secure: values.smtp_secure === true || values.smtp_secure === 'true',
+        auth: { user: values.smtp_user, pass: pass },
+        connectionTimeout: 10000
       });
+
       await transporter.verify();
       res.json({ success: true, message: 'SMTP 连接成功' });
     } catch (error: any) {
+      console.error('[SMTP Test Error]:', error);
       res.status(500).json({ success: false, message: `测试失败: ${error.message}` });
     }
   };
