@@ -21,294 +21,230 @@ interface ConvertJob {
   inputPath: string;
   outputPath?: string;
   outputFileName: string;
-  outputSize?: number; // 产物真实大小
+  outputSize?: number;
   token?: string;
   error?: string;
   createdAt: number;
   isZip: boolean;
-  progress?: {
-    total: number;
-    current: number;
-    message: string;
-  };
-  options?: {
-    makeEven?: boolean;
-  };
+  progress?: { total: number; current: number; message: string; };
+  options?: { makeEven?: boolean; splitOddEven?: boolean; };
 }
 
 const convertJobs = new Map<string, ConvertJob>();
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, job] of convertJobs.entries()) {
-    if (now - job.createdAt > 30 * 60 * 1000) {
-      if (job.outputPath && fs.existsSync(job.outputPath)) {
-        const jobDir = path.dirname(job.outputPath);
-        if (jobDir.includes('job_')) fs.rmSync(jobDir, { recursive: true, force: true });
-      }
-      convertJobs.delete(id);
-    }
-  }
-}, 10 * 60 * 1000);
-
 export class ConvertController {
   public docxToPdf(req: Request, res: Response, _next: NextFunction) {
-    if (!req.file) {
-      res.status(400).json({ success: false, message: '请上传文件' });
-      return;
-    }
+    if (!req.file) return res.status(400).json({ success: false, message: '请上传文件' });
 
     const jobId = uuidv4();
-    const inputPath = req.file.path;
     const originalName = path.parse(req.file.originalname).name;
     const isZip = req.file.originalname.toLowerCase().endsWith('.zip');
     const makeEven = req.body.makeEven === 'true' || req.body.makeEven === true;
+    const splitOddEven = req.body.splitOddEven === 'true' || req.body.splitOddEven === true;
 
     const job: ConvertJob = {
       id: jobId,
       status: 'pending',
-      inputPath,
-      outputFileName: isZip ? `${originalName}_converted.zip` : `${originalName}.pdf`,
+      inputPath: req.file.path,
+      outputFileName: (isZip || splitOddEven) ? `${originalName}_converted.zip` : `${originalName}.pdf`,
       createdAt: Date.now(),
       isZip,
-      options: { makeEven }
+      options: { makeEven, splitOddEven }
     };
 
     convertJobs.set(jobId, job);
-    this.processConversion(jobId, inputPath, isZip, makeEven);
+    this.processConversion(jobId);
     res.status(202).json({ success: true, message: '任务已提交', jobId });
   }
 
   public async uploadChunk(req: Request, res: Response) {
-    const { uploadId, index, total, fileName, makeEven } = req.body;
+    const { uploadId, index, total, fileName, makeEven, splitOddEven } = req.body;
     const chunk = req.file;
-    if (!chunk) return res.status(400).json({ success: false, message: '无分块数据' });
+    if (!chunk) return res.status(400).json({ success: false, message: '无数据' });
 
     const chunkDir = path.join(os.tmpdir(), `chunks_${uploadId}`);
     if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
+    fs.renameSync(chunk.path, path.join(chunkDir, `${index}`));
 
-    const chunkPath = path.join(chunkDir, `${index}`);
-    fs.renameSync(chunk.path, chunkPath);
-
-    const chunks = fs.readdirSync(chunkDir);
-    if (chunks.length === parseInt(total)) {
-      const finalPath = path.join(os.tmpdir(), `upload_${uploadId}_${fileName}`);
+    if (fs.readdirSync(chunkDir).length === parseInt(total)) {
+      const finalPath = path.join(os.tmpdir(), `up_${uploadId}_${fileName}`);
       const writeStream = fs.createWriteStream(finalPath);
-      
-      const chunkCount = parseInt(total);
-      for (let i = 0; i < chunkCount; i++) {
+      for (let i = 0; i < parseInt(total); i++) {
         const p = path.join(chunkDir, `${i}`);
-        if (fs.existsSync(p)) {
-          writeStream.write(fs.readFileSync(p));
-          fs.unlinkSync(p);
-        }
+        writeStream.write(fs.readFileSync(p));
+        fs.unlinkSync(p);
       }
       writeStream.end();
-
       writeStream.on('finish', () => {
         fs.rmSync(chunkDir, { recursive: true, force: true });
-        const isZip = fileName.toLowerCase().endsWith('.zip');
         const job: ConvertJob = {
           id: uploadId,
           status: 'pending',
           inputPath: finalPath,
-          outputFileName: isZip ? `${path.parse(fileName).name}_converted.zip` : `${path.parse(fileName).name}.pdf`,
+          outputFileName: (fileName.toLowerCase().endsWith('.zip') || splitOddEven === 'true') ? `${path.parse(fileName).name}_converted.zip` : `${path.parse(fileName).name}.pdf`,
           createdAt: Date.now(),
-          isZip,
-          options: { makeEven: makeEven === 'true' }
+          isZip: fileName.toLowerCase().endsWith('.zip'),
+          options: { makeEven: makeEven === 'true', splitOddEven: splitOddEven === 'true' }
         };
         convertJobs.set(uploadId, job);
-        this.processConversion(uploadId, finalPath, isZip, job.options?.makeEven || false);
+        this.processConversion(uploadId);
       });
       return res.json({ success: true, jobId: uploadId, merged: true });
     }
     res.json({ success: true, merged: false });
   }
 
-  private async processConversion(jobId: string, inputPath: string, isZip: boolean, makeEven: boolean) {
+  private async processConversion(jobId: string) {
     const job = convertJobs.get(jobId);
     if (!job) return;
-
     job.status = 'processing';
-    const tempBaseDir = path.join(os.tmpdir(), `job_${jobId}`);
-    if (fs.existsSync(tempBaseDir)) fs.rmSync(tempBaseDir, { recursive: true, force: true });
-    fs.mkdirSync(tempBaseDir, { recursive: true });
+    const tempDir = path.join(os.tmpdir(), `job_${jobId}`);
+    fs.mkdirSync(tempDir, { recursive: true });
 
     try {
-      if (isZip) {
-        await this.handleZipProcessing(job, inputPath, tempBaseDir, makeEven);
+      if (job.isZip) {
+        await this.handleZipProcessing(job, tempDir);
       } else {
-        await this.handleSingleFileProcessing(job, inputPath, tempBaseDir, makeEven);
+        await this.handleSingleFileProcessing(job, tempDir);
       }
-      
-      // 计算真实大小
       if (job.outputPath && fs.existsSync(job.outputPath)) {
         job.outputSize = fs.statSync(job.outputPath).size;
       }
-
       job.token = generateDownloadToken('anonymous');
       job.status = 'completed';
     } catch (error: any) {
       job.status = 'failed';
       job.error = error.message;
     } finally {
-      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(job.inputPath)) fs.unlinkSync(job.inputPath);
       convertJobs.set(jobId, job);
     }
   }
 
-  private async handleSingleFileProcessing(job: ConvertJob, inputPath: string, outDir: string, makeEven: boolean) {
-    job.progress = { total: 1, current: 0, message: '正在转换...' };
-    job.outputPath = await this.convertWithRetry(inputPath, outDir, makeEven);
-    job.progress.current = 1;
+  private async handleSingleFileProcessing(job: ConvertJob, tempDir: string) {
+    const pdfPath = await this.convertWithRetry(job.inputPath, tempDir, job.options?.makeEven || false);
+    
+    if (job.options?.splitOddEven) {
+      const { oddPath, evenPath } = await this.splitPdfOddEven(pdfPath);
+      const zip = new AdmZip();
+      const baseName = path.parse(job.inputPath).name;
+      zip.addLocalFile(oddPath, '', `${baseName}_奇数页.pdf`);
+      zip.addLocalFile(evenPath, '', `${baseName}_偶数页.pdf`);
+      const zipPath = path.join(tempDir, job.outputFileName);
+      zip.writeZip(zipPath);
+      job.outputPath = zipPath;
+    } else {
+      job.outputPath = pdfPath;
+    }
   }
 
-  private async handleZipProcessing(job: ConvertJob, inputPath: string, tempBaseDir: string, makeEven: boolean) {
-    const unzipDir = path.join(tempBaseDir, 'unzip');
-    const outputDir = path.join(tempBaseDir, 'output');
+  private async handleZipProcessing(job: ConvertJob, tempDir: string) {
+    const unzipDir = path.join(tempDir, 'unzip');
+    const outputDir = path.join(tempDir, 'output');
     fs.mkdirSync(unzipDir, { recursive: true });
     fs.mkdirSync(outputDir, { recursive: true });
 
-    try {
-      const zip = new AdmZip(inputPath);
-      zip.extractAllTo(unzipDir, true);
-    } catch { throw new Error('压缩包解析失败'); }
+    const zip = new AdmZip(job.inputPath);
+    zip.extractAllTo(unzipDir, true);
 
-    const convertFiles: string[] = []; // 需要转换的 docx
-    const keepFiles: { fullPath: string; relativePath: string }[] = []; // 需要保留的 pdf
-
+    const convertFiles: string[] = [];
+    const keepFiles: { fullPath: string; relativePath: string }[] = [];
     const walk = (dir: string) => {
       fs.readdirSync(dir).forEach(file => {
-        const fullPath = path.join(dir, file);
-        const relativePath = path.relative(unzipDir, fullPath);
-        if (fs.statSync(fullPath).isDirectory()) walk(fullPath);
-        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) convertFiles.push(fullPath);
-        else if (file.toLowerCase().endsWith('.pdf')) keepFiles.push({ fullPath, relativePath });
+        const full = path.join(dir, file);
+        if (fs.statSync(full).isDirectory()) walk(full);
+        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) convertFiles.push(full);
+        else if (file.toLowerCase().endsWith('.pdf')) keepFiles.push({ fullPath: full, relativePath: path.relative(unzipDir, full) });
       });
     };
     walk(unzipDir);
 
-    if (convertFiles.length === 0 && keepFiles.length === 0) throw new Error('压缩包内无可处理的文件');
-
-    job.progress = { total: convertFiles.length, current: 0, message: '开始并行处理...' };
     const limit = pLimit(CONCURRENCY_LIMIT);
-    const convertedResults: { relativePath: string; pdfPath: string }[] = [];
-
-    const tasks = convertFiles.map((file) => limit(async () => {
-      const relativePath = path.relative(unzipDir, file);
-      const fileOutDir = path.join(outputDir, path.dirname(relativePath));
-      const pdfPath = await this.convertWithRetry(file, fileOutDir, makeEven);
-      convertedResults.push({ relativePath, pdfPath });
-      job.progress!.current++;
-      job.progress!.message = `正在转换: ${path.basename(file)} (${job.progress!.current}/${job.progress!.total})`;
-      convertJobs.set(job.id, job);
-    }));
-
-    await Promise.all(tasks);
-
     const outZip = new AdmZip();
-    // 1. 添加转换后的 PDF
-    for (const res of convertedResults) {
-      const zipEntryPath = path.dirname(res.relativePath);
-      outZip.addLocalFile(res.pdfPath, zipEntryPath === '.' ? '' : zipEntryPath);
-    }
-    // 2. 添加保留的原有 PDF (维持目录结构)
+
+    await Promise.all(convertFiles.map(file => limit(async () => {
+      const pdf = await this.convertWithRetry(file, outputDir, job.options?.makeEven || false);
+      const relDir = path.dirname(path.relative(unzipDir, file));
+      const base = path.parse(file).name;
+
+      if (job.options?.splitOddEven) {
+        const { oddPath, evenPath } = await this.splitPdfOddEven(pdf);
+        outZip.addLocalFile(oddPath, relDir === '.' ? '' : relDir, `${base}_奇数页.pdf`);
+        outZip.addLocalFile(evenPath, relDir === '.' ? '' : relDir, `${base}_偶数页.pdf`);
+      } else {
+        outZip.addLocalFile(pdf, relDir === '.' ? '' : relDir);
+      }
+    })));
+
     for (const keep of keepFiles) {
-      const zipEntryPath = path.dirname(keep.relativePath);
-      outZip.addLocalFile(keep.fullPath, zipEntryPath === '.' ? '' : zipEntryPath);
+      outZip.addLocalFile(keep.fullPath, path.dirname(keep.relativePath) === '.' ? '' : path.dirname(keep.relativePath));
     }
 
-    const finalZipPath = path.join(tempBaseDir, job.outputFileName);
-    outZip.writeZip(finalZipPath);
-    job.outputPath = finalZipPath;
+    const finalPath = path.join(tempDir, job.outputFileName);
+    outZip.writeZip(finalPath);
+    job.outputPath = finalPath;
   }
 
-  private async convertWithRetry(docxPath: string, outDir: string, makeEven: boolean, retries = 2): Promise<string> {
-    let lastError;
-    for (let i = 0; i <= retries; i++) {
-      try {
-        return await this.convertDocxToPdf(docxPath, outDir, makeEven);
-      } catch (e: any) {
-        lastError = e;
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-    throw lastError;
-  }
+  private async splitPdfOddEven(pdfPath: string): Promise<{ oddPath: string; evenPath: string }> {
+    const pdfBytes = fs.readFileSync(pdfPath);
+    const srcDoc = await PDFDocument.load(pdfBytes);
+    const oddDoc = await PDFDocument.create();
+    const evenDoc = await PDFDocument.create();
 
-  private async convertDocxToPdf(docxPath: string, outDir: string, makeEven: boolean): Promise<string> {
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    const profileId = uuidv4();
-    const userProfileDir = path.join(os.tmpdir(), `libre_profile_${profileId}`);
-    const command = `libreoffice -env:UserInstallation=file://${userProfileDir} --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`;
+    const pageIndices = srcDoc.getPageIndices();
+    const oddIndices = pageIndices.filter(i => (i + 1) % 2 !== 0);
+    const evenIndices = pageIndices.filter(i => (i + 1) % 2 === 0);
+
+    const oddPages = await oddDoc.copyPages(srcDoc, oddIndices);
+    oddPages.forEach(p => oddDoc.addPage(p));
     
-    try {
-      await execAsync(command);
-      const originalName = path.parse(docxPath).name;
-      const pdfPath = path.join(outDir, `${originalName}.pdf`);
-      
-      if (!fs.existsSync(pdfPath)) {
-        const files = fs.readdirSync(outDir);
-        const fallback = files.find(f => f.toLowerCase().endsWith('.pdf'));
-        if (!fallback) throw new Error('PDF 生成失败');
-        return path.join(outDir, fallback);
-      }
+    const evenPages = await evenDoc.copyPages(srcDoc, evenIndices);
+    evenPages.forEach(p => evenDoc.addPage(p));
 
-      if (makeEven) {
-        try {
-          const pdfBytes = fs.readFileSync(pdfPath);
-          const pdfDoc = await PDFDocument.load(pdfBytes);
-          const pageCount = pdfDoc.getPageCount();
-          
-          if (pageCount % 2 !== 0) {
-            console.log(`[PDF] Adding blank page to ${originalName}.pdf (Current: ${pageCount})`);
-            pdfDoc.addPage();
-            const modifiedPdfBytes = await pdfDoc.save();
-            fs.writeFileSync(pdfPath, Buffer.from(modifiedPdfBytes));
+    const oddPath = pdfPath.replace('.pdf', '_odd.pdf');
+    const evenPath = pdfPath.replace('.pdf', '_even.pdf');
+    fs.writeFileSync(oddPath, await oddDoc.save());
+    fs.writeFileSync(evenPath, await evenDoc.save());
+
+    return { oddPath, evenPath };
+  }
+
+  private async convertWithRetry(docxPath: string, outDir: string, makeEven: boolean): Promise<string> {
+    for (let i = 0; i <= 2; i++) {
+      try {
+        const profileDir = path.join(os.tmpdir(), `libre_${uuidv4()}`);
+        await execAsync(`libreoffice -env:UserInstallation=file://${profileDir} --headless --convert-to pdf --outdir "${outDir}" "${docxPath}"`);
+        if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
+        
+        const pdfPath = path.join(outDir, `${path.parse(docxPath).name}.pdf`);
+        if (!fs.existsSync(pdfPath)) throw new Error('PDF missing');
+
+        if (makeEven) {
+          const doc = await PDFDocument.load(fs.readFileSync(pdfPath));
+          if (doc.getPageCount() % 2 !== 0) {
+            doc.addPage();
+            fs.writeFileSync(pdfPath, await doc.save());
           }
-        } catch (err: any) {
-          console.error(`[MakeEven Error] Failed to process ${pdfPath}:`, err.message);
         }
-      }
-      return pdfPath;
-    } finally {
-      if (fs.existsSync(userProfileDir)) fs.rmSync(userProfileDir, { recursive: true, force: true });
+        return pdfPath;
+      } catch (e) { if (i === 2) throw e; await new Promise(r => setTimeout(r, 1000)); }
     }
+    return '';
   }
 
   public getStatus(req: Request, res: Response) {
     const jobId = req.params.jobId as string;
     const job = convertJobs.get(jobId);
-    if (!job) return res.status(404).json({ success: false, message: '任务不存在' });
-    res.json({
-      success: true,
-      jobId: job.id,
-      status: job.status,
-      outputFileName: job.outputFileName,
-      outputSize: job.outputSize, // 包含物理大小
-      progress: job.progress,
-      downloadToken: job.status === 'completed' ? job.token : undefined,
-      error: job.error
-    });
+    if (!job) return res.status(404).json({ success: false });
+    res.json({ success: true, jobId: job.id, status: job.status, outputFileName: job.outputFileName, outputSize: job.outputSize, downloadToken: job.token, error: job.error });
   }
 
   public downloadFile(req: Request, res: Response) {
     const jobId = req.params.jobId as string;
-    const token = req.query.token as string;
     const job = convertJobs.get(jobId);
-
-    if (!job || job.status !== 'completed' || !job.token || job.token !== token || !job.outputPath) {
-      res.status(403).json({ success: false, message: '无效凭证' });
-      return;
-    }
-
-    const uriEncodedName = encodeURIComponent(job.outputFileName);
-    const rfc6266Name = uriEncodedName.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\!/g, '%21').replace(/\'/g, '%27').replace(/\*/g, '%2A');
-
-    res.setHeader('Content-Disposition', `attachment; filename="${uriEncodedName}"; filename*=UTF-8''${rfc6266Name}`);
-    res.setHeader('Content-Type', job.isZip ? 'application/zip' : 'application/pdf');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-    res.sendFile(path.resolve(job.outputPath));
+    if (!job || job.token !== req.query.token) return res.status(403).json({ success: false });
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(job.outputFileName)}"`);
+    res.sendFile(path.resolve(job.outputPath!));
   }
 }
 
