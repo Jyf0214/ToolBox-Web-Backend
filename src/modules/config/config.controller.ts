@@ -66,7 +66,21 @@ export class ConfigController {
   };
 
   public getHealth = async (_req: Request, res: Response) => {
-    res.json({ success: true, data: { dbStatus: DatabaseManager.getStatus(), dbType: DatabaseManager.getType() } });
+    const mem = process.memoryUsage();
+    res.json({
+      success: true,
+      data: {
+        dbStatus: DatabaseManager.getStatus(),
+        dbType: DatabaseManager.getType(),
+        nodeVersion: process.version,
+        uptime: Math.floor(process.uptime()),
+        memory: {
+          rss: Math.round(mem.rss / 1024 / 1024) + ' MB',
+          heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + ' MB'
+        },
+        timestamp: new Date().toISOString()
+      }
+    });
   };
 
   public getAllConfigs = async (req: Request, res: Response, next: NextFunction) => {
