@@ -21,7 +21,7 @@ ENV TZ=Asia/Shanghai \
     LANG=zh_CN.UTF-8 \
     LC_ALL=zh_CN.UTF-8
 
-# 安装 LibreOffice、Chromium 和更多中文字体 (Noto Sans/Serif CJK, WenQuanYi)
+# 安装 LibreOffice、Chromium 和更多开源字体 (中文+英文)
 RUN apk add --no-cache \
     tzdata \
     fontconfig \
@@ -29,6 +29,10 @@ RUN apk add --no-cache \
     font-noto-cjk-serif \
     font-wqy-zenhei \
     ttf-dejavu \
+    ttf-liberation \
+    ttf-opensans \
+    ttf-inconsolata \
+    ttf-ubuntu-font-family \
     ttf-freefont \
     libreoffice \
     udev \
