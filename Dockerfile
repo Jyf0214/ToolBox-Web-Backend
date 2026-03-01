@@ -31,6 +31,10 @@ RUN apk add --no-cache \
     ttf-dejavu \
     ttf-liberation \
     ttf-opensans \
+    ttf-lato \
+    ttf-montserrat \
+    ttf-roboto \
+    ttf-linux-libertine \
     ttf-inconsolata \
     ttf-ubuntu-font-family \
     ttf-freefont \
