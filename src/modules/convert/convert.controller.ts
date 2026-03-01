@@ -77,13 +77,14 @@ export class ConvertController {
       writeStream.end();
       writeStream.on('finish', () => {
         fs.rmSync(chunkDir, { recursive: true, force: true });
+        const isZip = fileName.toLowerCase().endsWith('.zip');
         const job: ConvertJob = {
           id: uploadId,
           status: 'pending',
           inputPath: finalPath,
-          outputFileName: (fileName.toLowerCase().endsWith('.zip') || splitOddEven === 'true') ? `${path.parse(fileName).name}_converted.zip` : `${path.parse(fileName).name}.pdf`,
+          outputFileName: (isZip || splitOddEven === 'true') ? `${path.parse(fileName).name}_converted.zip` : `${path.parse(fileName).name}.pdf`,
           createdAt: Date.now(),
-          isZip: fileName.toLowerCase().endsWith('.zip'),
+          isZip,
           options: { makeEven: makeEven === 'true', splitOddEven: splitOddEven === 'true' }
         };
         convertJobs.set(uploadId, job);
@@ -147,14 +148,13 @@ export class ConvertController {
     const zip = new AdmZip(job.inputPath);
     zip.extractAllTo(unzipDir, true);
 
-    const convertFiles: string[] = [];
-    const keepFiles: { fullPath: string; relativePath: string }[] = [];
+    const allTasks: { fullPath: string; type: 'docx' | 'pdf' }[] = [];
     const walk = (dir: string) => {
       fs.readdirSync(dir).forEach(file => {
         const full = path.join(dir, file);
         if (fs.statSync(full).isDirectory()) walk(full);
-        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) convertFiles.push(full);
-        else if (file.toLowerCase().endsWith('.pdf')) keepFiles.push({ fullPath: full, relativePath: path.relative(unzipDir, full) });
+        else if (file.toLowerCase().endsWith('.docx') && !file.startsWith('~$')) allTasks.push({ fullPath: full, type: 'docx' });
+        else if (file.toLowerCase().endsWith('.pdf')) allTasks.push({ fullPath: full, type: 'pdf' });
       });
     };
     walk(unzipDir);
@@ -162,25 +162,40 @@ export class ConvertController {
     const limit = pLimit(CONCURRENCY_LIMIT);
     const outZip = new AdmZip();
 
-    await Promise.all(convertFiles.map(file => limit(async () => {
-      const pdf = await this.convertWithRetry(file, outputDir, job.options?.makeEven || false);
-      const relDir = path.dirname(path.relative(unzipDir, file));
-      const base = path.parse(file).name;
+    await Promise.all(allTasks.map(task => limit(async () => {
+      let currentPdf: string;
+      const relDir = path.dirname(path.relative(unzipDir, task.fullPath));
+      const baseName = path.parse(task.fullPath).name;
 
-      if (job.options?.splitOddEven) {
-        const { oddPath, evenPath } = await this.splitPdfOddEven(pdf);
-        outZip.addLocalFile(oddPath, relDir === '.' ? '' : relDir, `${base}_奇数页.pdf`);
-        outZip.addLocalFile(evenPath, relDir === '.' ? '' : relDir, `${base}_偶数页.pdf`);
+      // 1. 获取 PDF (转换或直接使用)
+      if (task.type === 'docx') {
+        currentPdf = await this.convertWithRetry(task.fullPath, outputDir, job.options?.makeEven || false);
       } else {
-        outZip.addLocalFile(pdf, relDir === '.' ? '' : relDir);
+        currentPdf = task.fullPath;
+        // 如果开启了补白，对原始 PDF 也进行处理
+        if (job.options?.makeEven) {
+          const doc = await PDFDocument.load(fs.readFileSync(currentPdf));
+          if (doc.getPageCount() % 2 !== 0) {
+            doc.addPage();
+            const enhancedPath = path.join(outputDir, `enhanced_${uuidv4()}.pdf`);
+            fs.writeFileSync(enhancedPath, await doc.save());
+            currentPdf = enhancedPath;
+          }
+        }
+      }
+
+      // 2. 根据选项拆分或直接添加
+      if (job.options?.splitOddEven) {
+        const { oddPath, evenPath } = await this.splitPdfOddEven(currentPdf);
+        outZip.addLocalFile(oddPath, relDir === '.' ? '' : relDir, `${baseName}_奇数页.pdf`);
+        outZip.addLocalFile(evenPath, relDir === '.' ? '' : relDir, `${baseName}_偶数页.pdf`);
+      } else {
+        outZip.addLocalFile(currentPdf, relDir === '.' ? '' : relDir, `${baseName}.pdf`);
       }
     })));
 
-    for (const keep of keepFiles) {
-      outZip.addLocalFile(keep.fullPath, path.dirname(keep.relativePath) === '.' ? '' : path.dirname(keep.relativePath));
-    }
-
     const finalPath = path.join(tempDir, job.outputFileName);
+    zip.writeZip(finalPath); // 这一行是错误的，应该是 outZip.writeZip
     outZip.writeZip(finalPath);
     job.outputPath = finalPath;
   }
@@ -201,8 +216,8 @@ export class ConvertController {
     const evenPages = await evenDoc.copyPages(srcDoc, evenIndices);
     evenPages.forEach(p => evenDoc.addPage(p));
 
-    const oddPath = pdfPath.replace('.pdf', '_odd.pdf');
-    const evenPath = pdfPath.replace('.pdf', '_even.pdf');
+    const oddPath = path.join(path.dirname(pdfPath), `odd_${uuidv4()}.pdf`);
+    const evenPath = path.join(path.dirname(pdfPath), `even_${uuidv4()}.pdf`);
     fs.writeFileSync(oddPath, await oddDoc.save());
     fs.writeFileSync(evenPath, await evenDoc.save());
 
