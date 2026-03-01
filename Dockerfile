@@ -21,14 +21,17 @@ ENV TZ=Asia/Shanghai \
     LANG=zh_CN.UTF-8 \
     LC_ALL=zh_CN.UTF-8
 
-# 安装 LibreOffice 和中文字体 (修正包名)
+# 安装 LibreOffice、Chromium 和更多中文字体 (Noto Sans/Serif CJK, WenQuanYi)
 RUN apk add --no-cache \
     tzdata \
     fontconfig \
     font-noto-cjk \
+    font-noto-cjk-serif \
+    font-wqy-zenhei \
+    ttf-dejavu \
+    ttf-freefont \
     libreoffice \
     udev \
-    ttf-freefont \
     chromium \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
