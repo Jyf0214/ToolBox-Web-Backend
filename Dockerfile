@@ -21,23 +21,19 @@ ENV TZ=Asia/Shanghai \
     LANG=zh_CN.UTF-8 \
     LC_ALL=zh_CN.UTF-8
 
-# 安装 LibreOffice、Chromium 和更多开源字体 (中文+英文)
+# 安装 LibreOffice、Chromium 和开源字体 (修正 Alpine 包名)
 RUN apk add --no-cache \
     tzdata \
     fontconfig \
     font-noto-cjk \
-    font-noto-cjk-serif \
+    font-noto-serif-cjk \
     font-wqy-zenhei \
     ttf-dejavu \
     ttf-liberation \
-    ttf-opensans \
-    ttf-lato \
-    ttf-montserrat \
-    ttf-roboto \
-    ttf-linux-libertine \
-    ttf-inconsolata \
-    ttf-ubuntu-font-family \
     ttf-freefont \
+    ttf-font-awesome \
+    ttf-inconsolata \
+    ttf-linux-libertine \
     libreoffice \
     udev \
     chromium \
